@@ -1,24 +1,40 @@
+# -----------------------------------------------------------------------------
 # Python
+# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
-*.pyd
+*$py.class
 
 # Virtual environments
 .venv/
 venv/
+env/
 
+# IDE / Editor
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# -----------------------------------------------------------------------------
 # Generated data
-data/
-index/
-index_*/
-sample/
+# -----------------------------------------------------------------------------
+data/*
+index/*
+sample/*
+logs/*
 
-# Logs and runtime state
-logs/
-*.log
-progress.json
+# Keep directory structure
+!data/.gitkeep
+!index/.gitkeep
+!sample/.gitkeep
+!logs/.gitkeep
 
+# -----------------------------------------------------------------------------
 # Large generated files
+# -----------------------------------------------------------------------------
 *.faiss
 *.f16
 *.f32
@@ -28,6 +44,6 @@ progress.json
 *.sqlite-shm
 *.sqlite-wal
 
-# Local settings
-.env
-.vscode/
+# Temporary files
+*.tmp
+*.bak

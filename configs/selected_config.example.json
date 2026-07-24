@@ -1,0 +1,10 @@
+{
+  "name":"ivf16384_pq64",
+  "index_type":"ivfpq",
+  "nlist":16384,
+  "pq_m":64,
+  "pq_bits":8,
+  "nprobe":128,
+  "candidate_count":300,
+  "use_float16_rerank":true
+}

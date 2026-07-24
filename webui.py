@@ -27,13 +27,20 @@ DEFAULT_PORT = 8765
 DEFAULT_INDEX = Path("index")
 DEFAULT_MODEL = "qwen3:14b"
 DEFAULT_TOP_K = 6
-DEFAULT_CONTEXT_CHARS = 10000
+DEFAULT_CONTEXT_CHARS = 5000
 
-SYSTEM_PROMPT = """あなたは日本語Wikipediaを根拠に回答するアシスタントです。
-渡された参考資料を優先し、資料にない事実を断定しないでください。
-情報が不足している場合は、その旨を明記してください。
-簡潔かつ具体的に回答してください。
-回答末尾に、参照したWikipedia記事名を列挙してください。"""
+SYSTEM_PROMPT = """あなたは日本語Wikipediaの参考資料を根拠に回答するアシスタントです。
+
+必ず守ること:
+- 質問に直接関係する資料だけを使ってください。
+- 別の人物・作品・組織の記事を、質問対象の情報として統合しないでください。
+- 最優先記事が示されている場合、その記事を回答の中心にしてください。
+- 資料にない年、契約額、成績、人物名、固有名詞を推測で補完しないでください。
+- 資料だけでは答えられない点は「参考資料からは確認できません」と明記してください。
+- 周辺情報は理解に必要な範囲だけ短く補足してください。
+- URLを生成しないでください。
+- 回答末尾には、実際に本文の根拠として使ったWikipedia記事名だけを列挙してください。
+- 簡潔かつ具体的な日本語で回答してください。"""
 
 HTML = r'''<!doctype html>
 <html lang="ja">
@@ -51,7 +58,7 @@ h1 { margin:0 0 6px; font-size:28px; }
 .subtitle { color:var(--muted); margin-bottom:20px; }
 .panel { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; }
 .grid { display:grid; grid-template-columns:minmax(300px,1fr) 250px 120px; gap:12px; }
-.params { display:grid; grid-template-columns:repeat(5,minmax(120px,1fr)); gap:12px; margin-top:14px; }
+.params { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:12px; margin-top:14px; }
 .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin-top:14px; }
 .metric { border:1px solid var(--border); border-radius:8px; padding:9px 11px; background:var(--source); }
 .metric-name { color:var(--muted); font-size:12px; }
@@ -87,10 +94,18 @@ button:disabled { opacity:.55; cursor:wait; }
       <div><label for="topk">検索件数</label><input id="topk" type="number" value="6" min="1" max="20"></div>
     </div>
     <div class="params">
+      <div><label for="searchMode">検索モード</label>
+        <select id="searchMode">
+          <option value="auto">自動</option>
+          <option value="strict">厳密</option>
+          <option value="balanced">バランス</option>
+          <option value="discovery">発見重視</option>
+        </select>
+      </div>
       <div><label for="think">Thinking</label><select id="think"><option value="auto">自動</option><option value="false">無効</option><option value="true">有効</option></select></div>
-      <div><label for="contextChars">参考資料文字数</label><input id="contextChars" type="number" value="10000" min="1000" max="100000" step="1000"></div>
+      <div><label for="contextChars">参考資料文字数</label><input id="contextChars" type="number" value="5000" min="1000" max="100000" step="1000"></div>
       <div><label for="numCtx">num_ctx</label><input id="numCtx" type="number" value="4096" min="1024" max="131072" step="1024"></div>
-      <div><label for="numPredict">num_predict</label><input id="numPredict" type="number" value="1024" min="64" max="32768" step="64"></div>
+      <div><label for="numPredict">num_predict</label><input id="numPredict" type="number" value="2048" min="64" max="32768" step="64"></div>
       <div><label for="temperature">temperature</label><input id="temperature" type="number" value="0.2" min="0" max="2" step="0.05"></div>
     </div>
     <div class="actions"><button id="ask">質問する</button><span id="status" class="status"></span></div>
@@ -107,37 +122,77 @@ button:disabled { opacity:.55; cursor:wait; }
 const askButton=document.getElementById("ask"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error");
 function metric(name,value){const box=document.createElement("div");box.className="metric";const n=document.createElement("div");n.className="metric-name";n.textContent=name;const v=document.createElement("div");v.className="metric-value";v.textContent=value;box.appendChild(n);box.appendChild(v);return box;}
 async function loadModels(){try{const response=await fetch("/api/models",{cache:"no-store"});const data=await response.json();if(!response.ok)throw new Error(data.error||"モデル一覧を取得できませんでした。");model.innerHTML="";for(const name of data.models){const option=document.createElement("option");option.value=name;option.textContent=name;if(name===data.default_model)option.selected=true;model.appendChild(option);}if(!data.models.length){const option=document.createElement("option");option.value="";option.textContent="Ollamaモデルがありません";model.appendChild(option);}}catch(e){model.innerHTML="";const option=document.createElement("option");option.value="";option.textContent="モデル一覧取得失敗";model.appendChild(option);status.textContent=String(e);}}
-async function ask(){const q=question.value.trim();if(!q){question.focus();return;}if(!model.value){status.textContent="回答モデルを選択してください。";return;}askButton.disabled=true;status.textContent="検索・生成中...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{const payload={question:q,model:model.value,top_k:Number(topk.value),think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)};const response=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||"処理に失敗しました。");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");details.innerHTML="";metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("モデル",m.model));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("検索時間",`${m.search_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("生成時間",`${m.generation_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("合計時間",`${m.total_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("参考資料",`${m.context_chars_used.toLocaleString()} 文字`));metrics.appendChild(metric("検索結果",`${m.result_count} チャンク`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("入力トークン",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("出力トークン",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("生成速度",`${m.eval_tokens_per_second.toFixed(2)} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking量",`${m.thinking_chars.toLocaleString()} 文字`));for(const item of data.results){const card=document.createElement("details");card.className="source-card";const summary=document.createElement("summary");summary.textContent=`${item.title} — chunk ${item.chunk_no+1}/${item.chunk_count}`;const meta=document.createElement("div");meta.className="meta";meta.textContent=`score=${item.score.toFixed(4)} / source=${item.match_source} / page_type=${item.page_type}`;const excerpt=document.createElement("div");excerpt.className="excerpt";excerpt.textContent=item.text;card.appendChild(summary);card.appendChild(meta);if(item.url){const link=document.createElement("a");link.href=item.url;link.target="_blank";link.rel="noreferrer";link.textContent=item.url;card.appendChild(link);}card.appendChild(excerpt);details.appendChild(card);}resultPanel.classList.remove("hidden");status.textContent="完了";}catch(e){error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="失敗";}finally{askButton.disabled=false;}}
+async function ask(){const q=question.value.trim();if(!q){question.focus();return;}if(!model.value){status.textContent="回答モデルを選択してください。";return;}askButton.disabled=true;status.textContent="検索・生成中...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{const payload={question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)};const response=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||"処理に失敗しました。");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");details.innerHTML="";metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("モデル",m.model));metrics.appendChild(metric("検索モード",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("検索時間",`${m.search_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("生成時間",`${m.generation_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("合計時間",`${m.total_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("参考資料",`${m.context_chars_used.toLocaleString()} 文字`));metrics.appendChild(metric("検索結果",`${m.result_count} チャンク`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("入力トークン",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("出力トークン",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("生成速度",`${m.eval_tokens_per_second.toFixed(2)} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking量",`${m.thinking_chars.toLocaleString()} 文字`));if(m.done_reason)metrics.appendChild(metric("終了理由",m.done_reason));for(const item of data.results){const card=document.createElement("details");card.className="source-card";const summary=document.createElement("summary");summary.textContent=`${item.title} — chunk ${item.chunk_no+1}/${item.chunk_count}`;const meta=document.createElement("div");meta.className="meta";meta.textContent=`score=${item.score.toFixed(4)} / source=${item.match_source} / page_type=${item.page_type}`;const excerpt=document.createElement("div");excerpt.className="excerpt";excerpt.textContent=item.text;card.appendChild(summary);card.appendChild(meta);if(item.url){const link=document.createElement("a");link.href=item.url;link.target="_blank";link.rel="noreferrer";link.textContent=item.url;card.appendChild(link);}card.appendChild(excerpt);details.appendChild(card);}resultPanel.classList.remove("hidden");status.textContent="完了";}catch(e){error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="失敗";}finally{askButton.disabled=false;}}
 askButton.addEventListener("click",ask);question.addEventListener("keydown",e=>{if(e.ctrlKey&&e.key==="Enter")ask();});loadModels();
 </script>
 </body>
 </html>'''
 
 
-def make_context(results, max_chars: int) -> tuple[str, list[str], int]:
-    grouped: dict[tuple[str, str, str], list] = defaultdict(list)
+def make_context(
+    results,
+    max_chars: int,
+) -> tuple[str, list[str], int, str | None]:
+    if not results:
+        return "", [], 0, None
+
+    grouped: dict[tuple[str, str], list] = defaultdict(list)
     for result in results:
         grouped[(result.title, result.url)].append(result)
 
-    groups = sorted(grouped.items(), key=lambda item: max(x.score for x in item[1]), reverse=True)
+    groups = sorted(
+        grouped.items(),
+        key=lambda item: max(x.score for x in item[1]),
+        reverse=True,
+    )
+    primary_key = groups[0][0]
+    primary_title = primary_key[0]
+
+    primary_budget = max_chars if len(groups) == 1 else int(max_chars * 0.75)
+    support_budget = max_chars - primary_budget
     parts: list[str] = []
     titles: list[str] = []
     used = 0
 
-    for (title, url), chunks in groups:
+    def append_group(label: str, key, chunks, budget: int) -> None:
+        nonlocal used
+        title, _url = key
         chunks.sort(key=lambda x: x.chunk_no)
-        body = "\n\n".join(x.text for x in chunks)
-        block = f"【記事】{title}\n【URL】{url}\n{body}"
-        if parts and used + len(block) > max_chars:
-            continue
+        body = "\n\n".join(
+            f"[chunk {x.chunk_no + 1}/{x.chunk_count}]\n{x.text}"
+            for x in chunks
+        )
+        block = (
+            f"=== {label} ===\n"
+            f"記事名: {title}\n"
+            f"扱い: {label}\n\n"
+            f"{body}"
+        )
+        allowed = min(budget, max_chars - used)
+        if allowed <= 0:
+            return
+        block = block[:allowed]
         parts.append(block)
         titles.append(title)
         used += len(block)
-        if used >= max_chars:
-            break
 
-    context = "\n\n---\n\n".join(parts)
-    return context, list(dict.fromkeys(titles)), len(context)
+    append_group("最優先記事", primary_key, grouped[primary_key], primary_budget)
+
+    support_groups = groups[1:]
+    if support_groups and support_budget > 0:
+        each = max(300, support_budget // len(support_groups))
+        for key, chunks in support_groups:
+            if used >= max_chars:
+                break
+            append_group(
+                "補助資料（質問対象と同一とは限らない）",
+                key,
+                chunks,
+                each,
+            )
+
+    context = "\n\n------------------------------\n\n".join(parts)
+    return context, list(dict.fromkeys(titles)), len(context), primary_title
 
 
 class RagApplication:
@@ -160,30 +215,158 @@ class RagApplication:
                 names.append(str(name))
         return sorted(set(names), key=str.casefold)
 
-    def ask(self, question: str, model: str, top_k: int, think_mode: str, context_chars: int, num_ctx: int, num_predict: int, temperature: float) -> dict:
+    def ask(
+        self,
+        question: str,
+        model: str,
+        top_k: int,
+        search_mode: str,
+        think_mode: str,
+        context_chars: int,
+        num_ctx: int,
+        num_predict: int,
+        temperature: float,
+    ) -> dict:
         total_started = time.perf_counter()
-        question = question.strip(); model = model.strip() or self.default_model
-        if not question: raise ValueError("質問が空です。")
-        if not 1 <= top_k <= 20: raise ValueError("検索件数は1～20で指定してください。")
-        if not 1000 <= context_chars <= 100000: raise ValueError("参考資料文字数は1,000～100,000で指定してください。")
-        if not 1024 <= num_ctx <= 131072: raise ValueError("num_ctxは1,024～131,072で指定してください。")
-        if not 64 <= num_predict <= 32768: raise ValueError("num_predictは64～32,768で指定してください。")
-        if not 0 <= temperature <= 2: raise ValueError("temperatureは0～2で指定してください。")
-        if think_mode not in {"auto","true","false"}: raise ValueError("Thinking指定が不正です。")
-        t=time.perf_counter(); results=self.search_engine.search(question,top_k=top_k); search_seconds=time.perf_counter()-t
-        if not results: raise RuntimeError("関連するWikipedia記事が見つかりませんでした。")
-        context,source_titles,context_chars_used=make_context(results,context_chars)
-        prompt=f"""以下の参考資料だけを主要な根拠として質問に回答してください。\n\n【参考資料】\n{context}\n\n【質問】\n{question}\n"""
-        kwargs={"model":model,"messages":[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":prompt}],"options":{"num_ctx":num_ctx,"num_predict":num_predict,"temperature":temperature}}
-        if think_mode!="auto": kwargs["think"]=(think_mode=="true")
-        t=time.perf_counter(); response=ollama.chat(**kwargs); generation_seconds=time.perf_counter()-t; total_seconds=time.perf_counter()-total_started
-        message=response["message"]; answer=message["content"]
-        thinking_text=message.get("thinking") if hasattr(message,"get") else getattr(message,"thinking",None)
-        def field(name): return response.get(name) if hasattr(response,"get") else getattr(response,name,None)
-        eval_count,prompt_eval_count,eval_duration=field("eval_count"),field("prompt_eval_count"),field("eval_duration")
-        tps=float(eval_count)/(float(eval_duration)/1_000_000_000) if eval_count is not None and eval_duration else None
-        return {"answer":answer,"source_titles":source_titles,"metrics":{"model":model,"think":think_mode,"search_seconds":search_seconds,"generation_seconds":generation_seconds,"total_seconds":total_seconds,"context_chars_used":context_chars_used,"result_count":len(results),"num_ctx":num_ctx,"num_predict":num_predict,"temperature":temperature,"prompt_eval_count":prompt_eval_count,"eval_count":eval_count,"eval_tokens_per_second":tps,"thinking_chars":len(thinking_text) if thinking_text else 0},"results":[{"chunk_id":r.chunk_id,"score":r.score,"title":r.title,"url":r.url,"section":r.section,"chunk_no":r.chunk_no,"chunk_count":r.chunk_count,"text":r.text,"page_type":r.page_type,"match_source":r.match_source} for r in results]}
+        question = question.strip()
+        model = model.strip() or self.default_model
 
+        if not question:
+            raise ValueError("質問が空です。")
+        if not 1 <= top_k <= 20:
+            raise ValueError("検索件数は1～20で指定してください。")
+        if search_mode not in {"auto", "strict", "balanced", "discovery"}:
+            raise ValueError("検索モードが不正です。")
+        if not 1000 <= context_chars <= 100000:
+            raise ValueError("参考資料文字数は1,000～100,000で指定してください。")
+        if not 1024 <= num_ctx <= 131072:
+            raise ValueError("num_ctxは1,024～131,072で指定してください。")
+        if not 64 <= num_predict <= 32768:
+            raise ValueError("num_predictは64～32,768で指定してください。")
+        if not 0 <= temperature <= 2:
+            raise ValueError("temperatureは0～2で指定してください。")
+        if think_mode not in {"auto", "true", "false"}:
+            raise ValueError("Thinking指定が不正です。")
+
+        started = time.perf_counter()
+        results = self.search_engine.search(
+            question,
+            top_k=top_k,
+            mode=search_mode,
+        )
+        search_seconds = time.perf_counter() - started
+
+        if not results:
+            if search_mode == "strict":
+                raise RuntimeError("厳密検索で一致する記事タイトルが見つかりませんでした。")
+            raise RuntimeError("関連するWikipedia記事が見つかりませんでした。")
+
+        context, source_titles, context_chars_used, primary_title = make_context(
+            results,
+            context_chars,
+        )
+
+        prompt = f"""以下の参考資料を使って質問に回答してください。
+
+検索モード: {search_mode}
+最優先記事: {primary_title or "特定なし"}
+
+資料の扱い:
+1. 最優先記事を回答の中心にしてください。
+2. 補助資料は、質問対象と明確に関係する場合だけ使ってください。
+3. 別人物・別作品・別組織の情報を質問対象へ混ぜないでください。
+4. 資料にない具体的事実を補完しないでください。
+5. URLは書かず、実際に使った記事名だけを最後に列挙してください。
+
+【参考資料】
+{context}
+
+【質問】
+{question}
+"""
+
+        kwargs = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "options": {
+                "num_ctx": num_ctx,
+                "num_predict": num_predict,
+                "temperature": temperature,
+            },
+        }
+        if think_mode != "auto":
+            kwargs["think"] = think_mode == "true"
+
+        started = time.perf_counter()
+        response = ollama.chat(**kwargs)
+        generation_seconds = time.perf_counter() - started
+        total_seconds = time.perf_counter() - total_started
+
+        message = response["message"]
+        answer = message["content"]
+        thinking_text = (
+            message.get("thinking")
+            if hasattr(message, "get")
+            else getattr(message, "thinking", None)
+        )
+
+        def field(name):
+            return (
+                response.get(name)
+                if hasattr(response, "get")
+                else getattr(response, name, None)
+            )
+
+        eval_count = field("eval_count")
+        prompt_eval_count = field("prompt_eval_count")
+        eval_duration = field("eval_duration")
+        done_reason = field("done_reason")
+        tps = (
+            float(eval_count) / (float(eval_duration) / 1_000_000_000)
+            if eval_count is not None and eval_duration
+            else None
+        )
+
+        return {
+            "answer": answer,
+            "source_titles": source_titles,
+            "metrics": {
+                "model": model,
+                "search_mode": search_mode,
+                "think": think_mode,
+                "search_seconds": search_seconds,
+                "generation_seconds": generation_seconds,
+                "total_seconds": total_seconds,
+                "context_chars_used": context_chars_used,
+                "result_count": len(results),
+                "num_ctx": num_ctx,
+                "num_predict": num_predict,
+                "temperature": temperature,
+                "prompt_eval_count": prompt_eval_count,
+                "eval_count": eval_count,
+                "eval_tokens_per_second": tps,
+                "thinking_chars": len(thinking_text) if thinking_text else 0,
+                "done_reason": done_reason,
+            },
+            "results": [
+                {
+                    "chunk_id": r.chunk_id,
+                    "score": r.score,
+                    "title": r.title,
+                    "url": r.url,
+                    "section": r.section,
+                    "chunk_no": r.chunk_no,
+                    "chunk_count": r.chunk_count,
+                    "text": r.text,
+                    "page_type": r.page_type,
+                    "match_source": r.match_source,
+                }
+                for r in results
+            ],
+        }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -222,10 +405,11 @@ class Handler(BaseHTTPRequestHandler):
                 question=str(request.get("question", "")),
                 model=str(request.get("model", self.app.default_model)),
                 top_k=int(request.get("top_k", DEFAULT_TOP_K)),
+                search_mode=str(request.get("search_mode", "auto")),
                 think_mode=str(request.get("think", "auto")),
                 context_chars=int(request.get("context_chars", self.app.context_chars)),
                 num_ctx=int(request.get("num_ctx", 4096)),
-                num_predict=int(request.get("num_predict", 1024)),
+                num_predict=int(request.get("num_predict", 2048)),
                 temperature=float(request.get("temperature", 0.2)),
             )
             self.send_json(result)

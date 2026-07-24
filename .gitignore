@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Generated data
+data/
+index/
+index_*/
+sample/
+
+# Logs and runtime state
+logs/
+*.log
+progress.json
+
+# Large generated files
+*.faiss
+*.f16
+*.f32
+*.i64
+*.ids
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Local settings
+.env
+.vscode/

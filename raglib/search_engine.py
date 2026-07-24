@@ -225,10 +225,17 @@ class SearchEngine:
 
         return boosts, sources, exact_articles
 
-    def search(self, query: str, top_k: int = 6) -> list[Result]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 6,
+        mode: str = "auto",
+    ) -> list[Result]:
         query = query.strip()
         if not query:
             return []
+        if mode not in {"auto", "strict", "balanced", "discovery"}:
+            raise ValueError(f"Unknown search mode: {mode}")
 
         query_vector = self.embedder.embed_query(query)
         candidate_count = int(self.index_config["candidate_count"])
@@ -354,24 +361,17 @@ class SearchEngine:
 
         scored.sort(key=lambda item: item[1], reverse=True)
 
-        # Navigation mode:
-        # when the query resolves to an exact/compact article title, use only
-        # chunks from that article. Mixing similarly named works is much more
-        # harmful to generation quality than returning a few less-relevant
-        # chunks from the correct article.
-        if exact_articles:
-            scored = [
-                item
-                for item in scored
-                if item[6]
-            ]
+        # Search modes:
+        # auto: exact title -> that article only; otherwise semantic search.
+        # strict: exact title required.
+        # balanced: exact article preferred, related articles may remain.
+        # discovery: broad semantic results.
+        if mode == "strict" and not exact_articles:
+            return []
 
-            # For story/plot questions, isolated high-scoring chunks from other
-            # sections of a long article are often less useful than a coherent
-            # consecutive passage. Start from the best semantic hit and expand
-            # only through adjacent chunks whose vector score remains close to
-            # the best score. Returning fewer than top_k is preferable to
-            # padding the context with unrelated sections.
+        if exact_articles and mode in {"auto", "strict"}:
+            scored = [item for item in scored if item[6]]
+
             if story_intent and scored:
                 by_chunk_no = {
                     int(metadata[item[0]][4]): item
@@ -395,8 +395,6 @@ class SearchEngine:
                     if not choices:
                         break
 
-                    # Prefer the stronger adjacent side, but never jump over a
-                    # weak boundary into another section.
                     choices.sort(key=lambda pair: pair[1][2], reverse=True)
                     chosen_no, chosen = choices[0]
                     if float(chosen[2]) < minimum_vector:
@@ -413,6 +411,13 @@ class SearchEngine:
                     key=lambda item: item[1],
                     reverse=True,
                 )
+
+        elif exact_articles and mode == "balanced":
+            exact_items = [item for item in scored if item[6]]
+            other_items = [item for item in scored if not item[6]]
+            exact_quota = min(top_k, max(2, (top_k * 2) // 3))
+            scored = exact_items[:exact_quota] + other_items
+
 
         exact_article_limit = top_k
         ordinary_article_limit = 2

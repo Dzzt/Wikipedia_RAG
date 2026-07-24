@@ -1,0 +1,2 @@
+FROM hf.co/Targoyle/ruri-v3-310m-GGUF:Q8_0
+PARAMETER num_ctx 8192

@@ -1,13 +1,13 @@
 # 日本語Wikipedia RAG — IVFPQ評価・本番構築版
 
-`data\ja_wiki.jsonl`だけを別途配置して使う、独立した新規プロジェクトです。旧プロジェクトのファイルは不要です。
+`data\ja_wiki.jsonl`だけを別途配置して使う、独立した新規プロジェクトです。
 
 ## 必須環境
 
 - Windows 11
 - Python
 - Ollama
-- `ruri-embed`
+- `ruri-v3`
 - 回答用モデル（例：`qwen3:14b`）
 - Pythonパッケージ: `ollama`, `faiss-cpu`, `numpy`, `tqdm`
 
@@ -37,7 +37,7 @@ wikipedia_rag_ivfpq/
 既に`ruri-embed`があればそのまま使えます。再作成する場合:
 
 ```powershell
-ollama create ruri-embed -f Modelfile.ruri
+ollama create ruri-v3 -f Modelfile.ruri
 ```
 
 ## 1. 評価用50万チャンクを抽出

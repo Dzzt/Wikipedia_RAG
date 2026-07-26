@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import bz2
 import json
 from pathlib import Path
 import time
+from typing import BinaryIO
 
 import faiss
 import numpy as np
@@ -14,6 +16,38 @@ from raglib import Article, BuildConfig, ChunkBuilder, OllamaEmbedder
 from raglib.faiss_helpers import create_index, train_index, clone_trained_empty
 from raglib.sqlite_store import connect, chunk_rows, INSERT_SQL, finalize_indexes
 from raglib.utils import configure_logging, read_json, write_json
+
+
+def open_jsonl(path: Path) -> BinaryIO:
+    """Open plain or bzip2-compressed JSONL as a binary stream.
+
+    Binary mode keeps tell()/seek() offsets stable so an interrupted
+    production build can resume at the last completed shard.
+    json.loads() accepts the UTF-8 encoded bytes returned by readline().
+    """
+    if path.suffix.lower() == ".bz2":
+        return bz2.open(path, mode="rb")
+    return path.open(mode="rb")
+
+
+def get_logical_input_size(path: Path) -> int:
+    """Return the uncompressed byte size used by tell()/seek().
+
+    A .bz2 file does not store this value in a directly readable header,
+    so determining it requires one streaming decompression pass. This is
+    only for accurate progress and ETA reporting; the JSONL is not written
+    to disk or loaded into memory.
+    """
+    if path.suffix.lower() != ".bz2":
+        return path.stat().st_size
+
+    print(
+        "圧縮JSONLの展開後サイズを確認しています"
+        "（ファイルは展開・保存しません）..."
+    )
+    with bz2.open(path, mode="rb") as file:
+        file.seek(0, 2)
+        return file.tell()
 
 
 def load_training_vectors(
@@ -162,7 +196,9 @@ def main() -> int:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path(r"data\ja_wiki.jsonl"),
+        default=Path(
+            r"data\wikipedia_ja_from_dump.jsonl.bz2"
+        ),
     )
     parser.add_argument(
         "--index-dir",
@@ -241,20 +277,18 @@ def main() -> int:
         finalize_indexes(connection)
         connection.close()
 
+        finalize_input_size = (
+            get_logical_input_size(args.input)
+            if args.input.exists()
+            else 0
+        )
+
         update_progress(
             progress_path,
             status="completed",
             input_path=args.input,
-            input_size_bytes=(
-                args.input.stat().st_size
-                if args.input.exists()
-                else 0
-            ),
-            input_offset_bytes=(
-                args.input.stat().st_size
-                if args.input.exists()
-                else 0
-            ),
+            input_size_bytes=finalize_input_size,
+            input_offset_bytes=finalize_input_size,
             current_shard=-1,
             completed_shards=0,
             completed_articles=0,
@@ -269,7 +303,9 @@ def main() -> int:
         )
         return 0
 
-    input_size_bytes = args.input.stat().st_size
+    input_size_bytes = get_logical_input_size(
+        args.input
+    )
     session_started = time.perf_counter()
 
     completed_rows = connection.execute(
@@ -442,10 +478,7 @@ def main() -> int:
     embedder = OllamaEmbedder(build_config)
 
     try:
-        with args.input.open(
-            "r",
-            encoding="utf-8",
-        ) as file:
+        with open_jsonl(args.input) as file:
             file.seek(start_offset)
 
             while True:

@@ -109,6 +109,35 @@ class SearchEngine:
             self.shards.append(entry)
             self.shards_by_number[int(manifest["shard_no"])] = entry
 
+    def get_combined_article(self, chunk_id: int) -> dict:
+        """Return every stored chunk for the article containing ``chunk_id``."""
+        target = self.connection.execute(
+            "SELECT article_id, title, COALESCE(url, '') "
+            "FROM chunks WHERE chunk_id=?",
+            (chunk_id,),
+        ).fetchone()
+        if target is None:
+            raise LookupError("指定された検索結果が見つかりません。")
+
+        article_id, title, url = target
+        rows = self.connection.execute(
+            "SELECT chunk_no, chunk_count, text "
+            "FROM chunks WHERE article_id=? ORDER BY chunk_no",
+            (article_id,),
+        ).fetchall()
+        if not rows:
+            raise LookupError("記事本文のチャンクが見つかりません。")
+
+        return {
+            "article_id": article_id,
+            "title": str(title),
+            "url": str(url),
+            "chunk_count": len(rows),
+            # The index was built with overlap. It is intentionally retained
+            # here so this view represents the exact stored chunks.
+            "text": "\n\n".join(str(row[2]) for row in rows),
+        }
+
     def _rerank_vector(
         self,
         query_vector: np.ndarray,

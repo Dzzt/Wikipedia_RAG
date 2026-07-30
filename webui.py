@@ -26,14 +26,15 @@ from raglib.search_engine import SearchEngine
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_INDEX = Path("index")
-#DEFAULT_MODEL="qwen3:14b"
-#DEFAULT_MODEL="qwen3VL:8b_instruct"
-#DEFAULT_MODEL="qwen3:8b_Q5"
-#DEFAULT_MODEL="Llama-3-Elyza-JP"
-#DEFAULT_MODEL="phi4"
-#DEFAULT_MODEL="gemma4:12b"
-#DEFAULT_MODEL="gemma4-e4b"
-DEFAULT_MODEL="Mistral-Nemo-Japanese"
+
+DEFAULT_MODEL = "Mistral-Nemo-Japanese"
+
+# リストに表示させたくないモデル（Embedding用モデルなど）を指定
+EXCLUDE_MODELS = {
+    "ruri",
+    "embed",
+}
+
 DEFAULT_TOP_K = 6
 DEFAULT_CONTEXT_CHARS = 10000
 
@@ -135,7 +136,54 @@ button:disabled { opacity:.55; cursor:wait; }
 <script>
 const askButton=document.getElementById("ask"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error");
 function metric(name,value){const box=document.createElement("div");box.className="metric";const n=document.createElement("div");n.className="metric-name";n.textContent=name;const v=document.createElement("div");v.className="metric-value";v.textContent=value;box.appendChild(n);box.appendChild(v);return box;}
-async function loadModels(){try{const response=await fetch("/api/models",{cache:"no-store"});const data=await response.json();if(!response.ok)throw new Error(data.error||"モデル一覧を取得できませんでした。");model.innerHTML="";for(const name of data.models){const option=document.createElement("option");option.value=name;option.textContent=name;if(name===data.default_model)option.selected=true;model.appendChild(option);}if(!data.models.length){const option=document.createElement("option");option.value="";option.textContent="Ollamaモデルがありません";model.appendChild(option);}}catch(e){model.innerHTML="";const option=document.createElement("option");option.value="";option.textContent="モデル一覧取得失敗";model.appendChild(option);status.textContent=String(e);}}
+
+async function loadModels(){
+  try{
+    const response=await fetch("/api/models",{cache:"no-store"});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||"モデル一覧を取得できませんでした。");
+    
+    model.innerHTML="";
+    const defaultModelNorm = (data.default_model || "").toLowerCase();
+    let hasSelected = false;
+
+    for(const name of data.models){
+      const option=document.createElement("option");
+      option.value=name;
+      option.textContent=name;
+      
+      const normName = name.toLowerCase();
+      if(!hasSelected && (
+          normName === defaultModelNorm || 
+          normName === `${defaultModelNorm}:latest` || 
+          normName.startsWith(`${defaultModelNorm}:`)
+      )){
+        option.selected=true;
+        hasSelected=true;
+      }
+      model.appendChild(option);
+    }
+    
+    if(!hasSelected && model.options.length > 0){
+      model.options[0].selected = true;
+    }
+
+    if(!data.models.length){
+      const option=document.createElement("option");
+      option.value="";
+      option.textContent="Ollamaモデルがありません";
+      model.appendChild(option);
+    }
+  }catch(e){
+    model.innerHTML="";
+    const option=document.createElement("option");
+    option.value="";
+    option.textContent="モデル一覧取得失敗";
+    model.appendChild(option);
+    status.textContent=String(e);
+  }
+}
+
 async function openArticle(title){try{const response=await fetch("/api/open_article",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title})});const data=await response.json();if(!response.ok)throw new Error(data.error||"記事ビューアを起動できませんでした。");status.textContent=`記事ビューアを起動しました: ${title}`;}catch(e){error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="ビューア起動失敗";}}
 function showArticleLinks(results){details.innerHTML="";const articles=new Map();for(const item of results){const key=item.title;if(!articles.has(key))articles.set(key,{title:item.title,matched:0,chunk_count:item.chunk_count});articles.get(key).matched++;}for(const item of articles.values()){const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.title));const count=document.createElement("span");count.className="meta";count.textContent=`検索該当 ${item.matched}件 / 全${item.chunk_count}チャンク`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}
 async function ask(){const q=question.value.trim();if(!q){question.focus();return;}if(!model.value){status.textContent="回答モデルを選択してください。";return;}askButton.disabled=true;status.textContent="検索・生成中...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{const payload={question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)};const response=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||"処理に失敗しました。");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");showArticleLinks(data.results);metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("モデル",m.model));metrics.appendChild(metric("検索モード",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("検索時間",`${m.search_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("生成時間",`${m.generation_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("合計時間",`${m.total_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("参考資料",`${m.context_chars_used.toLocaleString()} 文字`));metrics.appendChild(metric("検索結果",`${m.result_count} チャンク`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("入力トークン",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("出力トークン",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("生成速度",`${m.eval_tokens_per_second.toFixed(2)} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking量",`${m.thinking_chars.toLocaleString()} 文字`));if(m.done_reason)metrics.appendChild(metric("終了理由",m.done_reason));resultPanel.classList.remove("hidden");status.textContent="完了";}catch(e){error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="失敗";}finally{askButton.disabled=false;}}
@@ -227,8 +275,14 @@ class RagApplication:
                 name = item.get("model") or item.get("name")
             else:
                 name = getattr(item, "model", None) or getattr(item, "name", None)
+            
             if name:
-                names.append(str(name))
+                name_str = str(name)
+                # EXCLUDE_MODELS に指定されたキーワードを含むモデルを除外
+                if any(ex.lower() in name_str.lower() for ex in EXCLUDE_MODELS):
+                    continue
+                names.append(name_str)
+
         return sorted(set(names), key=str.casefold)
 
     def ask(

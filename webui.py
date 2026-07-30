@@ -28,7 +28,7 @@ DEFAULT_PORT = 8765
 DEFAULT_INDEX = Path("index")
 DEFAULT_MODEL = "qwen3:14b"
 DEFAULT_TOP_K = 6
-DEFAULT_CONTEXT_CHARS = 5000
+DEFAULT_CONTEXT_CHARS = 10000
 
 BASE_DIR = Path(__file__).resolve().parent
 VIEWER_SCRIPT = BASE_DIR / "wikipedia_viewer" / "wikipedia_jsonl_viewer.py"
@@ -61,29 +61,29 @@ HTML = r'''<!doctype html>
 * { box-sizing:border-box; }
 body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
 main { max-width:1050px; margin:0 auto; padding:28px 18px 60px; }
-h1 { margin:0 0 6px; font-size:28px; }
+h1 { margin:0 0 6px; font-size:25px; }
 .subtitle { color:var(--muted); margin-bottom:20px; }
-.panel { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; }
+.panel { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; font-size:12px; }
 .grid { display:grid; grid-template-columns:minmax(300px,1fr) 250px 120px; gap:12px; }
 .params { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:12px; margin-top:14px; }
 .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin-top:14px; }
 .metric { border:1px solid var(--border); border-radius:8px; padding:9px 11px; background:var(--source); }
-.metric-name { color:var(--muted); font-size:12px; }
+.metric-name { color:var(--muted); font-size:9px; }
 .metric-value { margin-top:3px; font-weight:600; word-break:break-word; }
-label { display:block; font-size:13px; color:var(--muted); margin-bottom:5px; }
+label { display:block; font-size:inherit; color:var(--muted); margin-bottom:5px; }
 textarea,select,input[type=number] { width:100%; border:1px solid var(--border); border-radius:8px; padding:10px; font:inherit; background:transparent; color:inherit; }
 textarea { min-height:120px; resize:vertical; }
 button { border:0; border-radius:8px; padding:11px 18px; font:inherit; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
 button:disabled { opacity:.55; cursor:wait; }
 .actions { display:flex; align-items:center; gap:14px; margin-top:14px; }
-.status { color:var(--muted); font-size:14px; }
-.answer { white-space:pre-wrap; line-height:1.75; background:var(--answer); border-radius:10px; padding:18px; }
-.sources { margin-top:14px; font-size:14px; }
+.status { color:var(--muted); font-size:inherit; }
+.answer { white-space:pre-wrap; line-height:1.75; background:var(--answer); border-radius:10px; padding:18px; font-size:14px; }
+.sources { margin-top:14px; font-size:11px; }
 .source-card { border:1px solid var(--border); background:var(--source); border-radius:9px; padding:12px; margin-top:10px; }
 .article-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .article-button { padding:0; background:transparent; color:var(--accent); text-align:left; }
 .article-button:hover { text-decoration:underline; }
-.meta { color:var(--muted); font-size:12px; margin:7px 0; }
+.meta { color:var(--muted); font-size:9px; margin:7px 0; }
 .excerpt { white-space:pre-wrap; line-height:1.6; }
 .hidden { display:none; }
 .error { color:#c0392b; white-space:pre-wrap; }
@@ -112,10 +112,10 @@ button:disabled { opacity:.55; cursor:wait; }
         </select>
       </div>
       <div><label for="think">Thinking</label><select id="think"><option value="auto">自動</option><option value="false">無効</option><option value="true">有効</option></select></div>
-      <div><label for="contextChars">参考資料文字数</label><input id="contextChars" type="number" value="5000" min="1000" max="100000" step="1000"></div>
+      <div><label for="contextChars">参考資料文字数</label><input id="contextChars" type="number" value="10000" min="1000" max="100000" step="1000"></div>
       <div><label for="numCtx">num_ctx</label><input id="numCtx" type="number" value="4096" min="1024" max="131072" step="1024"></div>
       <div><label for="numPredict">num_predict</label><input id="numPredict" type="number" value="2048" min="64" max="32768" step="64"></div>
-      <div><label for="temperature">temperature</label><input id="temperature" type="number" value="0.2" min="0" max="2" step="0.05"></div>
+      <div><label for="temperature">temperature</label><input id="temperature" type="number" value="0.4" min="0" max="2" step="0.05"></div>
     </div>
     <div class="actions"><button id="ask">質問する</button><span id="status" class="status"></span></div>
   </section>

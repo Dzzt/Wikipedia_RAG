@@ -43,6 +43,7 @@ logs/*
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite3
 
 # Temporary files
 *.tmp

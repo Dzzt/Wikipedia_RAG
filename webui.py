@@ -13,10 +13,11 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import subprocess
 import sys
 import traceback
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import ollama
 
@@ -29,18 +30,24 @@ DEFAULT_MODEL = "qwen3:14b"
 DEFAULT_TOP_K = 6
 DEFAULT_CONTEXT_CHARS = 5000
 
+BASE_DIR = Path(__file__).resolve().parent
+VIEWER_SCRIPT = BASE_DIR / "wikipedia_viewer" / "wikipedia_jsonl_viewer.py"
+VIEWER_DB = BASE_DIR / "wikipedia_viewer" / "wikipedia_articles.sqlite3"
+
 SYSTEM_PROMPT = """あなたは日本語Wikipediaの参考資料を根拠に回答するアシスタントです。
 
 必ず守ること:
-- 質問に直接関係する資料だけを使ってください。
-- 別の人物・作品・組織の記事を、質問対象の情報として統合しないでください。
-- 最優先記事が示されている場合、その記事を回答の中心にしてください。
-- 資料にない年、契約額、成績、人物名、固有名詞を推測で補完しないでください。
-- 資料だけでは答えられない点は「参考資料からは確認できません」と明記してください。
-- 周辺情報は理解に必要な範囲だけ短く補足してください。
-- URLを生成しないでください。
-- 回答末尾には、実際に本文の根拠として使ったWikipedia記事名だけを列挙してください。
-- 簡潔かつ具体的な日本語で回答してください。"""
+- 質問に直接関係する資料だけを使え。
+- 別の人物・作品・組織の記事を、質問対象の情報として統合するな。
+- 最優先記事が示されている場合、その記事を回答の中心にせよ。
+- 資料にない年、契約額、成績、人物名、固有名詞を推測で補完するな。
+- 資料だけでは答えられない点は「参考資料からは確認できません」と明記せよ。
+- 周辺情報は理解に必要な範囲だけ短く補足せよ。
+- URLを生成するな。
+- 回答末尾には、実際に本文の根拠として使ったWikipedia記事名だけを列挙せよ。
+- 具体的な日本語で回答せよ。
+- 列挙する場合には箇条書きを使用すること。
+"""
 
 HTML = r'''<!doctype html>
 <html lang="ja">
@@ -78,13 +85,6 @@ button:disabled { opacity:.55; cursor:wait; }
 .article-button:hover { text-decoration:underline; }
 .meta { color:var(--muted); font-size:12px; margin:7px 0; }
 .excerpt { white-space:pre-wrap; line-height:1.6; }
-.article-dialog { width:min(1000px,94vw); height:min(86vh,900px); padding:0; border:1px solid var(--border); border-radius:12px; background:var(--panel); color:var(--text); }
-.article-dialog::backdrop { background:rgba(0,0,0,.55); }
-.dialog-layout { height:100%; display:flex; flex-direction:column; }
-.dialog-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 18px; border-bottom:1px solid var(--border); }
-.dialog-header h2 { margin:0 0 5px; font-size:21px; }
-.dialog-close { padding:7px 12px; flex:none; }
-.article-content { flex:1; overflow:auto; margin:0; padding:20px; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; line-height:1.7; }
 .hidden { display:none; }
 .error { color:#c0392b; white-space:pre-wrap; }
 @media (max-width:760px) { .grid { grid-template-columns:1fr; } }
@@ -123,27 +123,19 @@ button:disabled { opacity:.55; cursor:wait; }
     <h2>回答</h2><div id="answer" class="answer"></div>
     <div id="metrics" class="metrics"></div>
     <div class="sources"><strong>参照記事</strong><div id="sourceTitles"></div></div>
-    <details style="margin-top:18px;"><summary>参照記事の全文（結合チャンク）</summary><div id="details"></div></details>
+    <details style="margin-top:18px;"><summary>参照記事一覧</summary><div id="details"></div></details>
   </section>
   <section id="errorPanel" class="panel hidden"><h2>エラー</h2><div id="error" class="error"></div></section>
 </main>
-<dialog id="articleDialog" class="article-dialog">
-  <div class="dialog-layout">
-    <div class="dialog-header">
-      <div><h2 id="articleTitle"></h2><div id="articleMeta" class="meta"></div><a id="articleUrl" target="_blank" rel="noreferrer"></a></div>
-      <button id="articleClose" class="dialog-close" type="button">閉じる</button>
-    </div>
-    <pre id="articleContent" class="article-content"></pre>
-  </div>
-</dialog>
+
 <script>
-const askButton=document.getElementById("ask"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error"),articleDialog=document.getElementById("articleDialog"),articleTitle=document.getElementById("articleTitle"),articleMeta=document.getElementById("articleMeta"),articleUrl=document.getElementById("articleUrl"),articleContent=document.getElementById("articleContent"),articleClose=document.getElementById("articleClose");
+const askButton=document.getElementById("ask"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error");
 function metric(name,value){const box=document.createElement("div");box.className="metric";const n=document.createElement("div");n.className="metric-name";n.textContent=name;const v=document.createElement("div");v.className="metric-value";v.textContent=value;box.appendChild(n);box.appendChild(v);return box;}
 async function loadModels(){try{const response=await fetch("/api/models",{cache:"no-store"});const data=await response.json();if(!response.ok)throw new Error(data.error||"モデル一覧を取得できませんでした。");model.innerHTML="";for(const name of data.models){const option=document.createElement("option");option.value=name;option.textContent=name;if(name===data.default_model)option.selected=true;model.appendChild(option);}if(!data.models.length){const option=document.createElement("option");option.value="";option.textContent="Ollamaモデルがありません";model.appendChild(option);}}catch(e){model.innerHTML="";const option=document.createElement("option");option.value="";option.textContent="モデル一覧取得失敗";model.appendChild(option);status.textContent=String(e);}}
-async function openArticle(chunkId){articleTitle.textContent="記事を読み込み中...";articleMeta.textContent="";articleUrl.textContent="";articleUrl.removeAttribute("href");articleContent.textContent="";articleDialog.showModal();try{const response=await fetch(`/api/article?chunk_id=${encodeURIComponent(chunkId)}`,{cache:"no-store"});const data=await response.json();if(!response.ok)throw new Error(data.error||"記事を取得できませんでした。");articleTitle.textContent=data.title;articleMeta.textContent=`保存されている ${data.chunk_count.toLocaleString()} チャンクを順番に結合して表示しています（オーバーラップを含みます）。`;if(data.url){articleUrl.href=data.url;articleUrl.textContent="Wikipediaのページを開く";}articleContent.textContent=data.text;}catch(e){articleTitle.textContent="記事の取得に失敗しました";articleContent.textContent=String(e);}}
-function showArticleLinks(results){details.innerHTML="";const articles=new Map();for(const item of results){const key=`${item.title}\n${item.url}`;if(!articles.has(key))articles.set(key,{...item,matched:0});articles.get(key).matched++;}for(const item of articles.values()){const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.chunk_id));const count=document.createElement("span");count.className="meta";count.textContent=`検索該当 ${item.matched}件 / 全${item.chunk_count}チャンク`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}
+async function openArticle(title){try{const response=await fetch("/api/open_article",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title})});const data=await response.json();if(!response.ok)throw new Error(data.error||"記事ビューアを起動できませんでした。");status.textContent=`記事ビューアを起動しました: ${title}`;}catch(e){error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="ビューア起動失敗";}}
+function showArticleLinks(results){details.innerHTML="";const articles=new Map();for(const item of results){const key=item.title;if(!articles.has(key))articles.set(key,{title:item.title,matched:0,chunk_count:item.chunk_count});articles.get(key).matched++;}for(const item of articles.values()){const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.title));const count=document.createElement("span");count.className="meta";count.textContent=`検索該当 ${item.matched}件 / 全${item.chunk_count}チャンク`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}
 async function ask(){const q=question.value.trim();if(!q){question.focus();return;}if(!model.value){status.textContent="回答モデルを選択してください。";return;}askButton.disabled=true;status.textContent="検索・生成中...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{const payload={question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)};const response=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||"処理に失敗しました。");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");showArticleLinks(data.results);metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("モデル",m.model));metrics.appendChild(metric("検索モード",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("検索時間",`${m.search_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("生成時間",`${m.generation_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("合計時間",`${m.total_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("参考資料",`${m.context_chars_used.toLocaleString()} 文字`));metrics.appendChild(metric("検索結果",`${m.result_count} チャンク`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("入力トークン",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("出力トークン",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("生成速度",`${m.eval_tokens_per_second.toFixed(2)} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking量",`${m.thinking_chars.toLocaleString()} 文字`));if(m.done_reason)metrics.appendChild(metric("終了理由",m.done_reason));resultPanel.classList.remove("hidden");status.textContent="完了";}catch(e){error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="失敗";}finally{askButton.disabled=false;}}
-articleClose.addEventListener("click",()=>articleDialog.close());articleDialog.addEventListener("click",e=>{if(e.target===articleDialog)articleDialog.close();});askButton.addEventListener("click",ask);question.addEventListener("keydown",e=>{if(e.ctrlKey&&e.key==="Enter")ask();});loadModels();
+askButton.addEventListener("click",ask);question.addEventListener("keydown",e=>{if(e.ctrlKey&&e.key==="Enter")ask();});loadModels();
 </script>
 </body>
 </html>'''
@@ -234,11 +226,6 @@ class RagApplication:
             if name:
                 names.append(str(name))
         return sorted(set(names), key=str.casefold)
-
-    def get_article(self, chunk_id: int) -> dict:
-        if chunk_id < 0:
-            raise ValueError("chunk_idが不正です。")
-        return self.search_engine.get_combined_article(chunk_id)
 
     def ask(
         self,
@@ -416,41 +403,57 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        if path == "/api/article":
-            try:
-                values = parse_qs(parsed.query).get("chunk_id", [])
-                if len(values) != 1:
-                    raise ValueError("chunk_idを1つ指定してください。")
-                self.send_json(self.app.get_article(int(values[0])))
-            except (ValueError, LookupError) as exc:
-                self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            except Exception as exc:
-                traceback.print_exc()
-                self.send_json({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/ask":
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
+        path = urlparse(self.path).path
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > 1_000_000:
                 raise ValueError("不正なリクエストサイズです。")
             request = json.loads(self.rfile.read(length).decode("utf-8"))
-            result = self.app.ask(
-                question=str(request.get("question", "")),
-                model=str(request.get("model", self.app.default_model)),
-                top_k=int(request.get("top_k", DEFAULT_TOP_K)),
-                search_mode=str(request.get("search_mode", "auto")),
-                think_mode=str(request.get("think", "auto")),
-                context_chars=int(request.get("context_chars", self.app.context_chars)),
-                num_ctx=int(request.get("num_ctx", 4096)),
-                num_predict=int(request.get("num_predict", 2048)),
-                temperature=float(request.get("temperature", 0.2)),
-            )
-            self.send_json(result)
+
+            if path == "/api/ask":
+                result = self.app.ask(
+                    question=str(request.get("question", "")),
+                    model=str(request.get("model", self.app.default_model)),
+                    top_k=int(request.get("top_k", DEFAULT_TOP_K)),
+                    search_mode=str(request.get("search_mode", "auto")),
+                    think_mode=str(request.get("think", "auto")),
+                    context_chars=int(request.get("context_chars", self.app.context_chars)),
+                    num_ctx=int(request.get("num_ctx", 4096)),
+                    num_predict=int(request.get("num_predict", 2048)),
+                    temperature=float(request.get("temperature", 0.2)),
+                )
+                self.send_json(result)
+                return
+
+            if path == "/api/open_article":
+                title = str(request.get("title", "")).strip()
+                if not title:
+                    raise ValueError("記事タイトルが空です。")
+                if not VIEWER_SCRIPT.is_file():
+                    raise FileNotFoundError(f"ビューアが見つかりません: {VIEWER_SCRIPT}")
+                if not VIEWER_DB.is_file():
+                    raise FileNotFoundError(f"記事データベースが見つかりません: {VIEWER_DB}")
+
+                subprocess.Popen(
+                    [
+                        "py",
+                        str(VIEWER_SCRIPT),
+                        "--db",
+                        str(VIEWER_DB),
+                        "--title",
+                        title,
+                    ],
+                    cwd=str(BASE_DIR),
+                )
+                self.send_json({"ok": True, "title": title})
+                return
+
+            self.send_error(HTTPStatus.NOT_FOUND)
+        except (ValueError, FileNotFoundError) as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             traceback.print_exc()
             self.send_json({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)

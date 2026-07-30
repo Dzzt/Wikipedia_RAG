@@ -1,4 +1,0 @@
-ollama
-faiss-cpu
-numpy
-tqdm

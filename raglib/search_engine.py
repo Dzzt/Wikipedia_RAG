@@ -20,6 +20,25 @@ PARTIAL_TITLE_BOOST = 0.10
 INTENT_SECTION_BOOST = 0.05
 DISAMBIGUATION_PENALTY = -0.08
 
+
+ARTICLE_FOCUS_EXACT_BONUS = 0.18
+ARTICLE_FOCUS_TOKEN_BONUS = 0.035
+ARTICLE_FOCUS_TOKEN_CAP = 0.14
+
+REQUEST_SUFFIXES = (
+    "について詳しく教えてください", "について詳しく教えて",
+    "について説明してください", "について説明して",
+    "について解説してください", "について解説して",
+    "について教えてください", "について教えて", "について知りたい",
+    "を詳しく教えてください", "を詳しく教えて",
+    "を説明してください", "を説明して",
+    "を解説してください", "を解説して",
+    "を教えてください", "を教えて",
+    "とは何ですか", "とは", "について",
+)
+
+ARTICLE_SPLIT_MARKERS = ("の", "について", "を", "とは")
+
 # These are deliberately modest. Vector similarity remains the main ranking signal.
 STORY_QUERY_TERMS = (
     "ストーリー",
@@ -254,6 +273,129 @@ class SearchEngine:
 
         return boosts, sources, exact_articles
 
+    def _detect_article_focus(self, query: str) -> tuple[str, str, str] | None:
+        """Find an exact article title at the beginning of a natural-language query.
+
+        Returns (article_id, title, residual_query). This is deliberately
+        conservative so the normal search remains the fallback.
+        """
+        normalized = normalize_title(query)
+        candidates = [normalized]
+
+        # Japanese queries commonly start with "<article title>の...".
+        for marker in ARTICLE_SPLIT_MARKERS:
+            start = 0
+            while True:
+                pos = normalized.find(marker, start)
+                if pos < 0:
+                    break
+                candidate = normalized[:pos].strip(" 　・、,。")
+                if len(candidate) >= 2:
+                    candidates.append(candidate)
+                start = pos + len(marker)
+
+        # Prefer the longest exact title candidate.
+        for candidate in sorted(set(candidates), key=len, reverse=True):
+            row = self.connection.execute(
+                "SELECT article_id, title FROM chunks "
+                "WHERE normalized_title=? ORDER BY chunk_no LIMIT 1",
+                (candidate,),
+            ).fetchone()
+            if row is None:
+                continue
+
+            article_id, title = str(row[0]), str(row[1])
+            residual = normalized
+            title_norm = normalize_title(title)
+            if residual.startswith(title_norm):
+                residual = residual[len(title_norm):].strip()
+            residual = residual.lstrip("のをについて、,。 　")
+
+            changed = True
+            while changed and residual:
+                changed = False
+                for suffix in REQUEST_SUFFIXES:
+                    if residual.endswith(suffix):
+                        residual = residual[:-len(suffix)].strip()
+                        changed = True
+                        break
+
+            return article_id, title, residual or title
+
+        return None
+
+    @staticmethod
+    def _focus_terms(residual: str) -> list[str]:
+        terms = re.findall(
+            r"[0-9A-Za-z][0-9A-Za-z_.+\-]{1,}|[\u30A0-\u30FFー]{2,}|[\u3400-\u9FFF\u3040-\u309F]{2,}",
+            residual,
+        )
+        stop = {"教えて", "ください", "について", "とは", "何ですか"}
+        return [term for term in terms if term not in stop][:8]
+
+    def _search_article_focus(self, query: str, top_k: int) -> list[Result] | None:
+        detected = self._detect_article_focus(query)
+        if detected is None:
+            return None
+
+        article_id, _title, residual = detected
+        query_vector = self.embedder.embed_query(residual)
+        terms = self._focus_terms(residual)
+        residual_compact = compact_title(residual)
+
+        rows = self.connection.execute(
+            "SELECT chunk_id, title, COALESCE(url, ''), COALESCE(section, ''), "
+            "chunk_no, chunk_count, text, page_type, quality_weight, "
+            "vector_shard, vector_row FROM chunks "
+            "WHERE article_id=? ORDER BY chunk_no",
+            (article_id,),
+        ).fetchall()
+        if not rows:
+            return []
+
+        scored = []
+        for row in rows:
+            chunk_id = int(row[0])
+            vector_score = self._rerank_vector(
+                query_vector, int(row[9]), int(row[10])
+            )
+            if vector_score is None:
+                vector_score = 0.0
+
+            searchable = f"{row[3]}\n{row[6]}"
+            searchable_compact = compact_title(searchable)
+            lexical = 0.0
+            sources = {"article_focus", "vector_exact"}
+            if residual_compact and residual_compact in searchable_compact:
+                lexical += ARTICLE_FOCUS_EXACT_BONUS
+                sources.add("focus_phrase")
+            matched_terms = sum(1 for term in terms if compact_title(term) in searchable_compact)
+            if matched_terms:
+                lexical += min(
+                    ARTICLE_FOCUS_TOKEN_CAP,
+                    matched_terms * ARTICLE_FOCUS_TOKEN_BONUS,
+                )
+                sources.add("focus_terms")
+
+            quality_adjustment = (float(row[8]) - 1.0) * 0.25
+            if row[7] == "disambiguation":
+                quality_adjustment += DISAMBIGUATION_PENALTY
+            final_score = vector_score + lexical + quality_adjustment
+            scored.append((final_score, vector_score, lexical, quality_adjustment, row, sources))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        results = []
+        for final_score, vector_score, lexical, quality_adjustment, row, sources in scored[:top_k]:
+            results.append(Result(
+                chunk_id=int(row[0]), score=float(final_score),
+                vector_score=float(vector_score), title_boost=float(lexical),
+                quality_adjustment=float(quality_adjustment), title=str(row[1]),
+                url=str(row[2]), section=str(row[3]), chunk_no=int(row[4]),
+                chunk_count=int(row[5]), text=str(row[6]), page_type=str(row[7]),
+                match_source="+".join(sorted(sources)),
+            ))
+        return results
+
     def search(
         self,
         query: str,
@@ -263,8 +405,21 @@ class SearchEngine:
         query = query.strip()
         if not query:
             return []
-        if mode not in {"auto", "strict", "balanced", "discovery"}:
+        if mode not in {"auto", "legacy_auto", "strict", "balanced", "discovery", "article_focus"}:
             raise ValueError(f"Unknown search mode: {mode}")
+
+        # Default auto mode first tries the two-stage article-focused search.
+        # If no exact leading article title is found, it falls back to the
+        # previous automatic search unchanged.
+        if mode in {"auto", "article_focus"}:
+            focused = self._search_article_focus(query, top_k)
+            if focused is not None:
+                return focused
+            mode = "auto"
+
+        # Explicit comparison / rollback mode: always use the old auto path.
+        if mode == "legacy_auto":
+            mode = "auto"
 
         query_vector = self.embedder.embed_query(query)
         candidate_count = int(self.index_config["candidate_count"])

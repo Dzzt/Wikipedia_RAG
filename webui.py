@@ -110,10 +110,12 @@ button:disabled { opacity:.55; cursor:wait; }
     <div class="params">
       <div><label for="searchMode">検索モード</label>
         <select id="searchMode">
-          <option value="auto">自動</option>
+          <option value="auto">自動（記事内再検索）</option>
+          <option value="legacy_auto">従来自動</option>
           <option value="strict">厳密</option>
           <option value="balanced">バランス</option>
           <option value="discovery">発見重視</option>
+          <option value="article_focus">記事内再検索のみ</option>
         </select>
       </div>
       <div><label for="think">Thinking</label><select id="think"><option value="auto">自動</option><option value="false">無効</option><option value="true">有効</option></select></div>
@@ -305,7 +307,7 @@ class RagApplication:
             raise ValueError("質問が空です。")
         if not 1 <= top_k <= 20:
             raise ValueError("検索件数は1～20で指定してください。")
-        if search_mode not in {"auto", "strict", "balanced", "discovery"}:
+        if search_mode not in {"auto", "legacy_auto", "strict", "balanced", "discovery", "article_focus"}:
             raise ValueError("検索モードが不正です。")
         if not 1000 <= context_chars <= 100000:
             raise ValueError("参考資料文字数は1,000～100,000で指定してください。")
@@ -539,7 +541,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Local Wikipedia RAG Web UI")
+    parser = argparse.ArgumentParser(description="Local Wikipedia RAG Web UI (experimental)")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--index", type=Path, default=DEFAULT_INDEX)
@@ -561,7 +563,7 @@ def main() -> int:
     server.app = app  # type: ignore[attr-defined]
 
     print("=" * 68)
-    print("Wikipedia RAG Web UI")
+    print("Wikipedia RAG Web UI (experimental)")
     print(f"URL:   http://{args.host}:{args.port}")
     print(f"Index: {index_dir}")
     print(f"Model: {args.model}")

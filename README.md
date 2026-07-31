@@ -8,9 +8,9 @@
 - Ollamaで回答生成
 - 参照記事は専用Viewerで全文表示
 
-![WebUI](docs/images/webui.png)
+![WebUI](docs/images/wikipedia_RAG.png)
 
-![Viewer](docs/images/viewer.png)
+![Viewer](docs/images/wikipedia_viewer.png)
 
 ---
 

@@ -110,7 +110,7 @@ button:disabled { opacity:.55; cursor:wait; }
     <div class="params">
       <div><label for="searchMode">検索モード</label>
         <select id="searchMode">
-          <option value="auto">自動（記事内再検索）</option>
+          <option value="auto">自動</option>
           <option value="legacy_auto">従来自動</option>
           <option value="strict">厳密</option>
           <option value="balanced">バランス</option>

@@ -8,19 +8,18 @@ webui.py
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
+import sys
+import time
+import traceback
 from collections import defaultdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import json
 from pathlib import Path
-import subprocess
-import sys
-import traceback
-import time
 from urllib.parse import urlparse
 
 import ollama
-
 from raglib.search_engine import SearchEngine
 
 DEFAULT_HOST = "127.0.0.1"
@@ -29,14 +28,18 @@ DEFAULT_INDEX = Path("index")
 
 DEFAULT_MODEL = "Mistral-Nemo-Japanese"
 
+DEFAULT_TOP_K = 8
+DEFAULT_CONTEXT_CHARS = 10000
+DEFAULT_CONTEXT_LENGTH = 8192
+DEFAULT_NUM_PREDICT = 2048
+DEFAULT_TEMPERATURE = 0.4
+
 # リストに表示させたくないモデル（Embedding用モデルなど）を指定
 EXCLUDE_MODELS = {
     "ruri",
     "embed",
 }
 
-DEFAULT_TOP_K = 6
-DEFAULT_CONTEXT_CHARS = 10000
 
 BASE_DIR = Path(__file__).resolve().parent
 VIEWER_SCRIPT = BASE_DIR / "wikipedia_viewer" / "wikipedia_jsonl_viewer.py"
@@ -54,77 +57,78 @@ SYSTEM_PROMPT = """あなたは日本語Wikipediaの参考資料を根拠に回�
 - 回答末尾には、実際に本文の根拠として使ったWikipedia記事名だけを列挙せよ。
 """
 
-HTML = r'''<!doctype html>
+# HTMLをf-stringに変更し、変数を {定数名} で直接埋め込めるように修正
+HTML = f'''<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wikipedia RAG</title>
 <style>
-:root { color-scheme: light dark; --bg:#f5f6f8; --panel:#fff; --text:#1d232a; --muted:#667085; --border:#d8dee6; --accent:#2f6fed; --answer:#eef4ff; --source:#f8fafc; }
-@media (prefers-color-scheme: dark) { :root { --bg:#15181d; --panel:#20242b; --text:#eef2f7; --muted:#a6afbd; --border:#3b424d; --accent:#7aa2ff; --answer:#1d2a43; --source:#191d23; } }
-* { box-sizing:border-box; }
-body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
-main { max-width:1050px; margin:0 auto; padding:28px 18px 60px; }
-h1 { margin:0 0 6px; font-size:25px; }
-.subtitle { color:var(--muted); margin-bottom:20px; }
-.panel { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; font-size:12px; }
-.grid { display:grid; grid-template-columns:minmax(300px,1fr) 250px 120px; gap:12px; }
-.params { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:12px; margin-top:14px; }
-.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin-top:14px; }
-.metric { border:1px solid var(--border); border-radius:8px; padding:9px 11px; background:var(--source); }
-.metric-name { color:var(--muted); font-size:9px; }
-.metric-value { margin-top:3px; font-weight:600; word-break:break-word; }
-label { display:block; font-size:inherit; color:var(--muted); margin-bottom:5px; }
-textarea,select,input[type=number] { width:100%; border:1px solid var(--border); border-radius:8px; padding:10px; font:inherit; background:transparent; color:inherit; }
-textarea { min-height:120px; resize:vertical; }
-button { border:0; border-radius:8px; padding:11px 18px; font:inherit; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
-button:disabled { opacity:.55; cursor:wait; }
-.actions { display:flex; align-items:center; gap:14px; margin-top:14px; }
-.status { color:var(--muted); font-size:inherit; }
-.answer { white-space:pre-wrap; line-height:1.75; background:var(--answer); border-radius:10px; padding:18px; font-size:14px; }
-.sources { margin-top:14px; font-size:11px; }
-.source-card { border:1px solid var(--border); background:var(--source); border-radius:9px; padding:12px; margin-top:10px; }
-.article-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.article-button { padding:0; background:transparent; color:var(--accent); text-align:left; }
-.article-button:hover { text-decoration:underline; }
-.meta { color:var(--muted); font-size:9px; margin:7px 0; }
-.excerpt { white-space:pre-wrap; line-height:1.6; }
-.hidden { display:none; }
-.error { color:#c0392b; white-space:pre-wrap; }
-@media (max-width:760px) { .grid { grid-template-columns:1fr; } }
+:root {{ color-scheme: light dark; --bg:#f5f6f8; --panel:#fff; --text:#1d232a; --muted:#667085; --border:#d8dee6; --accent:#2f6fed; --answer:#eef4ff; --source:#f8fafc; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg:#15181d; --panel:#20242b; --text:#eef2f7; --muted:#a6afbd; --border:#3b424d; --accent:#7aa2ff; --answer:#1d2a43; --source:#191d23; }} }}
+* {{ box-sizing:border-box; }}
+body {{ margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }}
+main {{ max-width:1050px; margin:0 auto; padding:28px 18px 60px; }}
+h1 {{ margin:0 0 6px; font-size:25px; }}
+.subtitle {{ color:var(--muted); margin-bottom:20px; }}
+.panel {{ background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; font-size:12px; }}
+.grid {{ display:grid; grid-template-columns:minmax(300px,1fr) 250px 120px; gap:12px; }}
+.params {{ display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:12px; margin-top:14px; }}
+.metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin-top:14px; }}
+.metric {{ border:1px solid var(--border); border-radius:8px; padding:9px 11px; background:var(--source); }}
+.metric-name {{ color:var(--muted); font-size:9px; }}
+.metric-value {{ margin-top:3px; font-weight:600; word-break:break-word; }}
+label {{ display:block; font-size:inherit; color:var(--muted); margin-bottom:5px; }}
+textarea,select,input[type=number] {{ width:100%; border:1px solid var(--border); border-radius:8px; padding:10px; font:inherit; background:transparent; color:inherit; }}
+textarea {{ min-height:120px; resize:vertical; }}
+button {{ border:0; border-radius:8px; padding:11px 18px; font:inherit; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }}
+button:disabled {{ opacity:.55; cursor:wait; }}
+.actions {{ display:flex; align-items:center; gap:14px; margin-top:14px; }}
+.status {{ color:var(--muted); font-size:inherit; }}
+.answer {{ white-space:pre-wrap; line-height:1.75; background:var(--answer); border-radius:10px; padding:18px; font-size:14px; }}
+.sources {{ margin-top:14px; font-size:11px; }}
+.source-card {{ border:1px solid var(--border); background:var(--source); border-radius:9px; padding:12px; margin-top:10px; }}
+.article-row {{ display:flex; align-items:center; justify-content:space-between; gap:12px; }}
+.article-button {{ padding:0; background:transparent; color:var(--accent); text-align:left; }}
+.article-button:hover {{ text-decoration:underline; }}
+.meta {{ color:var(--muted); font-size:9px; margin:7px 0; }}
+.excerpt {{ white-space:pre-wrap; line-height:1.6; }}
+.hidden {{ display:none; }}
+.error {{ color:#c0392b; white-space:pre-wrap; }}
+@media (max-width:760px) {{ .grid {{ grid-template-columns:1fr; }} }}
 </style>
 </head>
 <body>
 <main>
   <h1>Wikipedia RAG</h1>
-  <div class="subtitle">ruri-embed + FAISS + Ollama。通信はローカルのみです。</div>
+  <div class="subtitle">ruri-v3-m310 + FAISS + Ollama。通信はローカルのみです。</div>
   <section class="panel">
     <div class="grid">
-      <div><label for="question">質問</label><textarea id="question" placeholder="prompt:"></textarea></div>
-      <div><label for="model">回答モデル</label>
+      <div><label for="question">Question:</label><textarea id="question" placeholder="prompt:"></textarea></div>
+      <div><label for="model">Model:</label>
         <select id="model"><option value="">モデル一覧を取得中...</option></select>
       </div>
-      <div><label for="topk">検索件数</label><input id="topk" type="number" value="6" min="1" max="20"></div>
+      <div><label for="topk">検索件数</label><input id="topk" type="number" value="{DEFAULT_TOP_K}" min="1" max="40"></div>
     </div>
     <div class="params">
-      <div><label for="searchMode">検索モード</label>
+      <div><label for="searchMode">Search mode:</label>
         <select id="searchMode">
-          <option value="auto">自動</option>
-          <option value="legacy_auto">従来自動</option>
-          <option value="strict">厳密</option>
-          <option value="balanced">バランス</option>
-          <option value="discovery">発見重視</option>
-          <option value="article_focus">記事内再検索のみ</option>
+          <option value="auto">auto</option>
+          <option value="legacy_auto">legacy</option>
+          <option value="strict">strict</option>
+          <option value="balanced">balance</option>
+          <option value="discovery">discovery</option>
+          <option value="article_focus">article focus</option>
         </select>
       </div>
-      <div><label for="think">Thinking</label><select id="think"><option value="auto">自動</option><option value="false">無効</option><option value="true">有効</option></select></div>
-      <div><label for="contextChars">参考資料文字数</label><input id="contextChars" type="number" value="10000" min="1000" max="100000" step="1000"></div>
-      <div><label for="numCtx">num_ctx</label><input id="numCtx" type="number" value="8192" min="1024" max="131072" step="1024"></div>
-      <div><label for="numPredict">num_predict</label><input id="numPredict" type="number" value="2048" min="64" max="32768" step="64"></div>
-      <div><label for="temperature">temperature</label><input id="temperature" type="number" value="0.4" min="0" max="2" step="0.05"></div>
+      <div><label for="think">Thinking</label><select id="think"><option value="auto">auto</option><option value="false">diable</option><option value="true">enable</option></select></div>
+      <div><label for="contextChars">参考資料文字数</label><input id="contextChars" type="number" value="{DEFAULT_CONTEXT_CHARS}" min="1000" max="100000" step="1000"></div>
+      <div><label for="numCtx">num_ctx</label><input id="numCtx" type="number" value="{DEFAULT_CONTEXT_LENGTH}" min="1024" max="131072" step="1024"></div>
+      <div><label for="numPredict">num_predict</label><input id="numPredict" type="number" value="{DEFAULT_NUM_PREDICT}" min="64" max="32768" step="64"></div>
+      <div><label for="temperature">temperature</label><input id="temperature" type="number" value="{DEFAULT_TEMPERATURE}" min="0" max="2" step="0.05"></div>
     </div>
-    <div class="actions"><button id="ask">質問する</button><span id="status" class="status"></span></div>
+    <div class="actions"><button id="ask">ask</button><span id="status" class="status"></span></div>
   </section>
   <section id="resultPanel" class="panel hidden">
     <h2>回答</h2><div id="answer" class="answer"></div>
@@ -137,11 +141,11 @@ button:disabled { opacity:.55; cursor:wait; }
 
 <script>
 const askButton=document.getElementById("ask"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error");
-function metric(name,value){const box=document.createElement("div");box.className="metric";const n=document.createElement("div");n.className="metric-name";n.textContent=name;const v=document.createElement("div");v.className="metric-value";v.textContent=value;box.appendChild(n);box.appendChild(v);return box;}
+function metric(name,value){{const box=document.createElement("div");box.className="metric";const n=document.createElement("div");n.className="metric-name";n.textContent=name;const v=document.createElement("div");v.className="metric-value";v.textContent=value;box.appendChild(n);box.appendChild(v);return box;}}
 
-async function loadModels(){
-  try{
-    const response=await fetch("/api/models",{cache:"no-store"});
+async function loadModels(){{
+  try{{
+    const response=await fetch("/api/models",{{cache:"no-store"}});
     const data=await response.json();
     if(!response.ok)throw new Error(data.error||"モデル一覧を取得できませんでした。");
     
@@ -149,7 +153,7 @@ async function loadModels(){
     const defaultModelNorm = (data.default_model || "").toLowerCase();
     let hasSelected = false;
 
-    for(const name of data.models){
+    for(const name of data.models){{
       const option=document.createElement("option");
       option.value=name;
       option.textContent=name;
@@ -157,39 +161,39 @@ async function loadModels(){
       const normName = name.toLowerCase();
       if(!hasSelected && (
           normName === defaultModelNorm || 
-          normName === `${defaultModelNorm}:latest` || 
-          normName.startsWith(`${defaultModelNorm}:`)
-      )){
+          normName === `${{defaultModelNorm}}:latest` || 
+          normName.startsWith(`${{defaultModelNorm}}:`)
+      )){{
         option.selected=true;
         hasSelected=true;
-      }
+      }}
       model.appendChild(option);
-    }
+    }}
     
-    if(!hasSelected && model.options.length > 0){
+    if(!hasSelected && model.options.length > 0){{
       model.options[0].selected = true;
-    }
+    }}
 
-    if(!data.models.length){
+    if(!data.models.length){{
       const option=document.createElement("option");
       option.value="";
       option.textContent="Ollamaモデルがありません";
       model.appendChild(option);
-    }
-  }catch(e){
+    }}
+  }}catch(e){{
     model.innerHTML="";
     const option=document.createElement("option");
     option.value="";
     option.textContent="モデル一覧取得失敗";
     model.appendChild(option);
     status.textContent=String(e);
-  }
-}
+  }}
+}}
 
-async function openArticle(title){try{const response=await fetch("/api/open_article",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title})});const data=await response.json();if(!response.ok)throw new Error(data.error||"記事ビューアを起動できませんでした。");status.textContent=`記事ビューアを起動しました: ${title}`;}catch(e){error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="ビューア起動失敗";}}
-function showArticleLinks(results){details.innerHTML="";const articles=new Map();for(const item of results){const key=item.title;if(!articles.has(key))articles.set(key,{title:item.title,matched:0,chunk_count:item.chunk_count});articles.get(key).matched++;}for(const item of articles.values()){const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.title));const count=document.createElement("span");count.className="meta";count.textContent=`検索該当 ${item.matched}件 / 全${item.chunk_count}チャンク`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}
-async function ask(){const q=question.value.trim();if(!q){question.focus();return;}if(!model.value){status.textContent="回答モデルを選択してください。";return;}askButton.disabled=true;status.textContent="検索・生成中...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{const payload={question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)};const response=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||"処理に失敗しました。");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");showArticleLinks(data.results);metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("モデル",m.model));metrics.appendChild(metric("検索モード",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("検索時間",`${m.search_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("生成時間",`${m.generation_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("合計時間",`${m.total_seconds.toFixed(3)} 秒`));metrics.appendChild(metric("参考資料",`${m.context_chars_used.toLocaleString()} 文字`));metrics.appendChild(metric("検索結果",`${m.result_count} チャンク`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("入力トークン",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("出力トークン",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("生成速度",`${m.eval_tokens_per_second.toFixed(2)} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking量",`${m.thinking_chars.toLocaleString()} 文字`));if(m.done_reason)metrics.appendChild(metric("終了理由",m.done_reason));resultPanel.classList.remove("hidden");status.textContent="完了";}catch(e){error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="失敗";}finally{askButton.disabled=false;}}
-askButton.addEventListener("click",ask);question.addEventListener("keydown",e=>{if(e.ctrlKey&&e.key==="Enter")ask();});loadModels();
+async function openArticle(title){{try{{const response=await fetch("/api/open_article",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{title}})}});const data=await response.json();if(!response.ok)throw new Error(data.error||"記事ビューアを起動できませんでした。");status.textContent=`記事ビューアを起動しました: ${{title}}`;}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="ビューア起動失敗";}}}}
+function showArticleLinks(results){{details.innerHTML="";const articles=new Map();for(const item of results){{const key=item.title;if(!articles.has(key))articles.set(key,{{title:item.title,matched:0,chunk_count:item.chunk_count}});articles.get(key).matched++;}}for(const item of articles.values()){{const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.title));const count=document.createElement("span");count.className="meta";count.textContent=`検索該当 ${{item.matched}}件 / 全${{item.chunk_count}}チャンク`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}}}
+async function ask(){{const q=question.value.trim();if(!q){{question.focus();return;}}if(!model.value){{status.textContent="回答モデルを選択してください。";return;}}askButton.disabled=true;status.textContent="検索・生成中...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{{const payload={{question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)}};const response=await fetch("/api/ask",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(payload)}});const data=await response.json();if(!response.ok)throw new Error(data.error||"処理に失敗しました。");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");showArticleLinks(data.results);metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("モデル",m.model));metrics.appendChild(metric("検索モード",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("検索時間",`${{m.search_seconds.toFixed(3)}} 秒`));metrics.appendChild(metric("生成時間",`${{m.generation_seconds.toFixed(3)}} 秒`));metrics.appendChild(metric("合計時間",`${{m.total_seconds.toFixed(3)}} 秒`));metrics.appendChild(metric("参考資料",`${{m.context_chars_used.toLocaleString()}} 文字`));metrics.appendChild(metric("検索結果",`${{m.result_count}} チャンク`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("入力トークン",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("出力トークン",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("生成速度",`${{m.eval_tokens_per_second.toFixed(2)}} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking量",`${{m.thinking_chars.toLocaleString()}} 文字`));if(m.done_reason)metrics.appendChild(metric("終了理由",m.done_reason));resultPanel.classList.remove("hidden");status.textContent="完了";}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="失敗";}}finally{{askButton.disabled=false;}}}}
+askButton.addEventListener("click",ask);question.addEventListener("keydown",e=>{{if(e.ctrlKey&&e.key==="Enter")ask();}});loadModels();
 </script>
 </body>
 </html>'''
@@ -225,15 +229,9 @@ def make_context(
         title, _url = key
         chunks.sort(key=lambda x: x.chunk_no)
         body = "\n\n".join(
-            f"[chunk {x.chunk_no + 1}/{x.chunk_count}]\n{x.text}"
-            for x in chunks
+            f"[chunk {x.chunk_no + 1}/{x.chunk_count}]\n{x.text}" for x in chunks
         )
-        block = (
-            f"=== {label} ===\n"
-            f"記事名: {title}\n"
-            f"扱い: {label}\n\n"
-            f"{body}"
-        )
+        block = f"=== {label} ===\n記事名: {title}\n扱い: {label}\n\n{body}"
         allowed = min(budget, max_chars - used)
         if allowed <= 0:
             return
@@ -270,14 +268,18 @@ class RagApplication:
 
     def list_models(self) -> list[str]:
         response = ollama.list()
-        raw_models = response.get("models", []) if hasattr(response, "get") else getattr(response, "models", [])
+        raw_models = (
+            response.get("models", [])
+            if hasattr(response, "get")
+            else getattr(response, "models", [])
+        )
         names = []
         for item in raw_models:
             if hasattr(item, "get"):
                 name = item.get("model") or item.get("name")
             else:
                 name = getattr(item, "model", None) or getattr(item, "name", None)
-            
+
             if name:
                 name_str = str(name)
                 # EXCLUDE_MODELS に指定されたキーワードを含むモデルを除外
@@ -301,13 +303,24 @@ class RagApplication:
     ) -> dict:
         total_started = time.perf_counter()
         question = question.strip()
-        model = model.strip() or self.default_model
+        model = (
+            model.strip() or self.default_default_model
+            if hasattr(self, "default_default_model")
+            else self.default_model
+        )
 
         if not question:
             raise ValueError("質問が空です。")
-        if not 1 <= top_k <= 20:
-            raise ValueError("検索件数は1～20で指定してください。")
-        if search_mode not in {"auto", "legacy_auto", "strict", "balanced", "discovery", "article_focus"}:
+        if not 1 <= top_k <= 40:
+            raise ValueError("検索件数は1～40で指定してください。")
+        if search_mode not in {
+            "auto",
+            "legacy_auto",
+            "strict",
+            "balanced",
+            "discovery",
+            "article_focus",
+        }:
             raise ValueError("検索モードが不正です。")
         if not 1000 <= context_chars <= 100000:
             raise ValueError("参考資料文字数は1,000～100,000で指定してください。")
@@ -330,7 +343,9 @@ class RagApplication:
 
         if not results:
             if search_mode == "strict":
-                raise RuntimeError("厳密検索で一致する記事タイトルが見つかりませんでした。")
+                raise RuntimeError(
+                    "厳密検索で一致する記事タイトルが見つかりませんでした。"
+                )
             raise RuntimeError("関連するWikipedia記事が見つかりませんでした。")
 
         context, source_titles, context_chars_used, primary_title = make_context(
@@ -455,13 +470,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_text(HTML, "text/html; charset=utf-8")
             return
         if path == "/api/health":
-            self.send_json({"ok": True, "index": str(self.app.index_dir), "model": self.app.default_model})
+            self.send_json(
+                {
+                    "ok": True,
+                    "index": str(self.app.index_dir),
+                    "model": self.app.default_model,
+                }
+            )
             return
         if path == "/api/models":
             try:
-                self.send_json({"models": self.app.list_models(), "default_model": self.app.default_model})
+                self.send_json(
+                    {
+                        "models": self.app.list_models(),
+                        "default_model": self.app.default_model,
+                    }
+                )
             except Exception as exc:
-                self.send_json({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_json(
+                    {"error": f"{type(exc).__name__}: {exc}"},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -474,16 +503,19 @@ class Handler(BaseHTTPRequestHandler):
             request = json.loads(self.rfile.read(length).decode("utf-8"))
 
             if path == "/api/ask":
+                # バックエンド側のデフォルト値にも定義された定数を適用
                 result = self.app.ask(
                     question=str(request.get("question", "")),
                     model=str(request.get("model", self.app.default_model)),
                     top_k=int(request.get("top_k", DEFAULT_TOP_K)),
                     search_mode=str(request.get("search_mode", "auto")),
                     think_mode=str(request.get("think", "auto")),
-                    context_chars=int(request.get("context_chars", self.app.context_chars)),
-                    num_ctx=int(request.get("num_ctx", 4096)),
-                    num_predict=int(request.get("num_predict", 2048)),
-                    temperature=float(request.get("temperature", 0.2)),
+                    context_chars=int(
+                        request.get("context_chars", self.app.context_chars)
+                    ),
+                    num_ctx=int(request.get("num_ctx", DEFAULT_CONTEXT_LENGTH)),
+                    num_predict=int(request.get("num_predict", DEFAULT_NUM_PREDICT)),
+                    temperature=float(request.get("temperature", DEFAULT_TEMPERATURE)),
                 )
                 self.send_json(result)
                 return
@@ -493,9 +525,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not title:
                     raise ValueError("記事タイトルが空です。")
                 if not VIEWER_SCRIPT.is_file():
-                    raise FileNotFoundError(f"ビューアが見つかりません: {VIEWER_SCRIPT}")
+                    raise FileNotFoundError(
+                        f"ビューアが見つかりません: {VIEWER_SCRIPT}"
+                    )
                 if not VIEWER_DB.is_file():
-                    raise FileNotFoundError(f"記事データベースが見つかりません: {VIEWER_DB}")
+                    raise FileNotFoundError(
+                        f"記事データベースが見つかりません: {VIEWER_DB}"
+                    )
 
                 subprocess.Popen(
                     [
@@ -516,7 +552,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             traceback.print_exc()
-            self.send_json({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            self.send_json(
+                {"error": f"{type(exc).__name__}: {exc}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
 
     def log_message(self, format: str, *args) -> None:
         sys.stdout.write(f"{self.address_string()} - {format % args}\n")
@@ -530,7 +569,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_text(self, value: str, content_type: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def send_text(
+        self, value: str, content_type: str, status: HTTPStatus = HTTPStatus.OK
+    ) -> None:
         body = value.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -541,7 +582,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Local Wikipedia RAG Web UI (experimental)")
+    parser = argparse.ArgumentParser(
+        description="Local Wikipedia RAG Web UI (experimental)"
+    )
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--index", type=Path, default=DEFAULT_INDEX)
@@ -555,7 +598,10 @@ def main() -> int:
     index_dir = args.index.resolve()
     if not index_dir.is_dir():
         print(f"インデックスが見つかりません: {index_dir}", file=sys.stderr)
-        print("別の場所にある場合は --index <インデックスフォルダ> を指定してください。", file=sys.stderr)
+        print(
+            "別の場所にある場合は --index <インデックスフォルダ> を指定してください。",
+            file=sys.stderr,
+        )
         return 1
 
     app = RagApplication(index_dir, args.model, args.context_chars)

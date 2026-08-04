@@ -24,6 +24,7 @@ from tkinter.scrolledtext import ScrolledText
 
 APP_TITLE = "Wikipedia JSONL Viewer"
 
+
 def get_article(db_path: Path, title: str) -> sqlite3.Row | None:
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
@@ -228,6 +229,13 @@ class ViewerApp(tk.Tk):
         self._ipc_queue: queue.Queue[dict] = queue.Queue()
         self._tab_count = 0
 
+        self.last_search_term = ""
+        self.last_search_index = "1.0"
+
+        self.bind("<Control-f>", self.on_search)
+        self.bind("<F3>", self.find_next)
+        self.bind("<Shift-F3>", self.find_previous)
+
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
@@ -295,7 +303,9 @@ class ViewerApp(tk.Tk):
             self.title(APP_TITLE)
             return
         frame = self.nametowidget(selected)
-        article_title = getattr(frame, "article_title", self.notebook.tab(selected, "text"))
+        article_title = getattr(
+            frame, "article_title", self.notebook.tab(selected, "text")
+        )
         self.status_var.set(f"表示中: {article_title}")
         self.title(f"{article_title} — {APP_TITLE}")
 
@@ -430,6 +440,136 @@ class ViewerApp(tk.Tk):
         self.status_var.set(f"表示中: {article_title}")
         self.title(f"{article_title} — {APP_TITLE}")
 
+    # find in text function
+
+    def on_search(self, event=None):
+        selected_tab = self.notebook.select()
+        if not selected_tab:
+            return
+        frame = self.nametowidget(selected_tab)
+        text = frame.article_text
+
+        search_window = tk.Toplevel(self)
+        search_window.title("検索")
+        search_window.geometry("300x100")
+        search_window.grab_set()
+        search_window.focus_set()
+
+        search_var = tk.StringVar()
+        entry = ttk.Entry(search_window, textvariable=search_var)
+        entry.pack(pady=10, fill=tk.X)
+        entry.focus_set()
+
+        def do_search():
+            term = search_var.get().strip()
+            if not term:
+                return
+            idx = self.find_text(text, term)
+            if idx:
+                self.last_search_term = term
+                self.last_search_index = idx
+            search_window.destroy()
+            self.focus_set()
+
+        entry.bind("<Return>", lambda event: do_search())
+        entry.bind("<Escape>", lambda event: search_window.destroy())
+        search_window.bind("<Escape>", lambda event: search_window.destroy())
+
+        ttk.Button(search_window, text="検索", command=do_search).pack()
+
+    def find_text(self, text_widget, term):
+        text_widget.tag_remove("search_highlight", "1.0", tk.END)
+        start = "1.0"
+        idx = text_widget.search(term, start, stopindex=tk.END, nocase=True)
+        if idx:
+            end_idx = f"{idx}+{len(term)}c"
+            text_widget.tag_add("search_highlight", idx, end_idx)
+            text_widget.tag_config(
+                "search_highlight", background="yellow", foreground="black"
+            )
+            text_widget.see(idx)
+            text_widget.mark_set(tk.INSERT, idx)
+            text_widget.focus_set()
+            return idx
+        else:
+            messagebox.showinfo("検索", "見つかりません。")
+            return None
+
+    def find_next(self, event=None):
+        selected_tab = self.notebook.select()
+        if not selected_tab:
+            return
+        frame = self.nametowidget(selected_tab)
+        text = frame.article_text
+
+        start = self.last_search_index
+        idx = text.search(self.last_search_term, start, stopindex=tk.END, nocase=True)
+        if idx:
+            end_idx = f"{idx}+{len(self.last_search_term)}c"
+            text.tag_add("search_highlight", idx, end_idx)
+            text.tag_config("search_highlight", background="yellow", foreground="black")
+            text.see(idx)
+            text.mark_set(tk.INSERT, idx)
+            self.last_search_index = end_idx
+        else:
+            idx = text.search(
+                self.last_search_term, "1.0", stopindex=tk.END, nocase=True
+            )
+            if idx:
+                end_idx = f"{idx}+{len(self.last_search_term)}c"
+                text.tag_add("search_highlight", idx, end_idx)
+                text.tag_config(
+                    "search_highlight", background="yellow", foreground="black"
+                )
+                text.see(idx)
+                text.mark_set(tk.INSERT, idx)
+                self.last_search_index = end_idx
+            else:
+                messagebox.showinfo("検索", "見つかりません。")
+
+    def find_previous(self, event=None):
+        selected_tab = self.notebook.select()
+        if not selected_tab:
+            return
+        frame = self.nametowidget(selected_tab)
+        text = frame.article_text
+
+        if not self.last_search_term:
+            return
+
+        start = self.last_search_index
+        idx = text.search(self.last_search_term, "1.0", start, nocase=True)
+        if idx:
+            end_idx = f"{idx}+{len(self.last_search_term)}c"
+            text.tag_add("search_highlight", idx, end_idx)
+            text.tag_config("search_highlight", background="yellow", foreground="black")
+            text.see(idx)
+            text.mark_set(tk.INSERT, idx)
+            self.last_search_index = end_idx
+        else:
+            idx = text.search(
+                self.last_search_term, "1.0", stopindex=tk.END, nocase=True
+            )
+            if idx:
+                end_idx = f"{idx}+{len(self.last_search_term)}c"
+                text.tag_add("search_highlight", idx, end_idx)
+                text.tag_config(
+                    "search_highlight", background="yellow", foreground="black"
+                )
+                text.see(idx)
+                text.mark_set(tk.INSERT, idx)
+                self.last_search_index = end_idx
+            else:
+                messagebox.showinfo("検索", "見つかりません。")
+
+    def reset_search(self):
+        selected_tab = self.notebook.select()
+        if not selected_tab:
+            return
+        frame = self.nametowidget(selected_tab)
+        text = frame.article_text
+        text.tag_remove("search_highlight", "1.0", tk.END)
+
 
 def ipc_port_for(db_path: Path) -> int:
     normalized = str(db_path.resolve()).casefold().encode("utf-8")
@@ -462,6 +602,7 @@ def create_ipc_listener(db_path: Path) -> socket.socket:
     listener.bind(("127.0.0.1", ipc_port_for(db_path)))
     listener.listen(8)
     return listener
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

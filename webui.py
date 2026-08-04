@@ -33,30 +33,28 @@ DEFAULT_CONTEXT_CHARS = 10000
 DEFAULT_CONTEXT_LENGTH = 8192
 DEFAULT_NUM_PREDICT = 3072
 DEFAULT_TEMPERATURE = 0.5
-
+SYSTEM_PROMPT = """
+あなたは日本語のWikipedia参考資料に基づいて質問に答えるアシスタントである。
+遵守すべき厳格なルール:
+- 情報を要約しすぎるな。
+- 質問に直接関連する参考資料を中心に回答を作成せよ。
+- メインとなる記事が指定されている場合は、その記事を中心に回答せよ。
+- 参考資料のテキストからの引用を積極的に活用し、それらを統合して詳細な回答を作成せよ。
+- 項目を３つ以上列挙する場合は積極的に箇条書きを使用せよ。
+- 周辺情報は、理解を助けるために必要な最小限にとどめよ。
+- URLは生成するな。
+- 参考資料に記載のない詳細については、「参考資料からは確認できません」と明確に記述せよ。
+- 回答の最後には、本文中で根拠として実際に使用したWikipediaの記事タイトルのみをリストアップせよ。
+"""
 # Models to exclude from the selection list (e.g., Embedding models)
 EXCLUDE_MODELS = {
     "ruri",
     "embed",
 }
 
-
 BASE_DIR = Path(__file__).resolve().parent
 VIEWER_SCRIPT = BASE_DIR / "wikipedia_viewer" / "wikipedia_jsonl_viewer.py"
 VIEWER_DB = BASE_DIR / "wikipedia_viewer" / "wikipedia_articles.sqlite3"
-
-SYSTEM_PROMPT = """You are an assistant that answers questions based on Japanese Wikipedia reference materials.
-
-Strict rules to follow:
-- Focus your answer on reference materials directly relevant to the question.
-- If a primary article is specified, focus your answer on that article.
-- Use bullet points when listing items.
-- Only supplement peripheral information to the extent necessary for understanding.
-- Avoid condensing the information too much. Rely heavily on quotes from the source text and synthesize them into a detailed answer.
-- Do not generate URLs.
-- Clearly state "Cannot be confirmed from reference materials" for details not present in the sources.
-- At the end of your response, list only the Wikipedia article titles that were actually used as evidence in the text.
-"""
 
 HTML = f'''<!doctype html>
 <html lang="en">
@@ -342,9 +340,7 @@ class RagApplication:
 
         if not results:
             if search_mode == "strict":
-                raise RuntimeError(
-                    "No matching article titles found in strict search."
-                )
+                raise RuntimeError("No matching article titles found in strict search.")
             raise RuntimeError("No relevant Wikipedia articles found.")
 
         context, source_titles, context_chars_used, primary_title = make_context(
@@ -523,13 +519,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not title:
                     raise ValueError("Article title is empty.")
                 if not VIEWER_SCRIPT.is_file():
-                    raise FileNotFoundError(
-                        f"Viewer script not found: {VIEWER_SCRIPT}"
-                    )
+                    raise FileNotFoundError(f"Viewer script not found: {VIEWER_SCRIPT}")
                 if not VIEWER_DB.is_file():
-                    raise FileNotFoundError(
-                        f"Article database not found: {VIEWER_DB}"
-                    )
+                    raise FileNotFoundError(f"Article database not found: {VIEWER_DB}")
 
                 subprocess.Popen(
                     [

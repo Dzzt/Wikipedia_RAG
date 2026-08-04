@@ -2,7 +2,7 @@
 """
 webui.py
 
-依存追加なしで動作する、完全ローカルのWikipedia RAG Web UI。
+A fully local Wikipedia RAG Web UI that runs without additional dependencies.
 """
 
 from __future__ import annotations
@@ -31,10 +31,10 @@ DEFAULT_MODEL = "Mistral-Nemo-Japanese"
 DEFAULT_TOP_K = 8
 DEFAULT_CONTEXT_CHARS = 10000
 DEFAULT_CONTEXT_LENGTH = 8192
-DEFAULT_NUM_PREDICT = 2048
-DEFAULT_TEMPERATURE = 0.4
+DEFAULT_NUM_PREDICT = 3072
+DEFAULT_TEMPERATURE = 0.5
 
-# リストに表示させたくないモデル（Embedding用モデルなど）を指定
+# Models to exclude from the selection list (e.g., Embedding models)
 EXCLUDE_MODELS = {
     "ruri",
     "embed",
@@ -45,21 +45,21 @@ BASE_DIR = Path(__file__).resolve().parent
 VIEWER_SCRIPT = BASE_DIR / "wikipedia_viewer" / "wikipedia_jsonl_viewer.py"
 VIEWER_DB = BASE_DIR / "wikipedia_viewer" / "wikipedia_articles.sqlite3"
 
-SYSTEM_PROMPT = """あなたは日本語Wikipediaの参考資料を根拠に回答するアシスタントです。
+SYSTEM_PROMPT = """You are an assistant that answers questions based on Japanese Wikipedia reference materials.
 
-必ず守ること:
-- 質問に直接関係する資料を回答の中心に使え。
-- 最優先記事が示されている場合、その記事を回答の中心にせよ。
-- 列挙する場合には箇条書きを使用すること。
-- 周辺情報は理解に必要な範囲だけ補足せよ。
-- URLを生成するな。
-- 資料だけでは答えられない点は「参考資料からは確認できません」と明記せよ。
-- 回答末尾には、実際に本文の根拠として使ったWikipedia記事名だけを列挙せよ。
+Strict rules to follow:
+- Focus your answer on reference materials directly relevant to the question.
+- If a primary article is specified, focus your answer on that article.
+- Use bullet points when listing items.
+- Only supplement peripheral information to the extent necessary for understanding.
+- Avoid condensing the information too much. Rely heavily on quotes from the source text and synthesize them into a detailed answer.
+- Do not generate URLs.
+- Clearly state "Cannot be confirmed from reference materials" for details not present in the sources.
+- At the end of your response, list only the Wikipedia article titles that were actually used as evidence in the text.
 """
 
-# HTMLをf-stringに変更し、変数を {定数名} で直接埋め込めるように修正
 HTML = f'''<!doctype html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -102,14 +102,14 @@ button:disabled {{ opacity:.55; cursor:wait; }}
 <body>
 <main>
   <h1>Wikipedia RAG</h1>
-  <div class="subtitle">ruri-v3-m310 + FAISS + Ollama。通信はローカルのみです。</div>
+  <div class="subtitle">ruri-v3-m310 + FAISS + Ollama. Local execution only.</div>
   <section class="panel">
     <div class="grid">
-      <div><label for="question">Question:</label><textarea id="question" placeholder="prompt:"></textarea></div>
+      <div><label for="question">Question:</label><textarea id="question" placeholder="Enter prompt..."></textarea></div>
       <div><label for="model">Model:</label>
-        <select id="model"><option value="">モデル一覧を取得中...</option></select>
+        <select id="model"><option value="">Fetching model list...</option></select>
       </div>
-      <div><label for="topk">検索件数</label><input id="topk" type="number" value="{DEFAULT_TOP_K}" min="1" max="40"></div>
+      <div><label for="topk">Top K</label><input id="topk" type="number" value="{DEFAULT_TOP_K}" min="1" max="40"></div>
     </div>
     <div class="params">
       <div><label for="searchMode">Search mode:</label>
@@ -119,35 +119,35 @@ button:disabled {{ opacity:.55; cursor:wait; }}
           <option value="strict">strict</option>
           <option value="balanced">balance</option>
           <option value="discovery">discovery</option>
-          <option value="article_focus">article focus</option>
+          <option value="article_focus" selected>article focus</option>
         </select>
       </div>
-      <div><label for="think">Thinking</label><select id="think"><option value="auto">auto</option><option value="false">diable</option><option value="true">enable</option></select></div>
-      <div><label for="contextChars">参考資料文字数</label><input id="contextChars" type="number" value="{DEFAULT_CONTEXT_CHARS}" min="1000" max="100000" step="1000"></div>
+      <div><label for="think">Thinking</label><select id="think"><option value="auto">auto</option><option value="false">disable</option><option value="true">enable</option></select></div>
+      <div><label for="contextChars">Context Chars</label><input id="contextChars" type="number" value="{DEFAULT_CONTEXT_CHARS}" min="1000" max="100000" step="1000"></div>
       <div><label for="numCtx">num_ctx</label><input id="numCtx" type="number" value="{DEFAULT_CONTEXT_LENGTH}" min="1024" max="131072" step="1024"></div>
       <div><label for="numPredict">num_predict</label><input id="numPredict" type="number" value="{DEFAULT_NUM_PREDICT}" min="64" max="32768" step="64"></div>
       <div><label for="temperature">temperature</label><input id="temperature" type="number" value="{DEFAULT_TEMPERATURE}" min="0" max="2" step="0.05"></div>
     </div>
-    <div class="actions"><button id="ask">ask</button><span id="status" class="status"></span></div>
+    <div class="actions"><button id="ask">Ask</button><span id="status" class="status"></span></div>
   </section>
   <section id="resultPanel" class="panel hidden">
-    <h2>回答</h2><div id="answer" class="answer"></div>
+    <h2>Answer</h2><div id="answer" class="answer"></div>
     <div id="metrics" class="metrics"></div>
-    <div class="sources"><strong>参照記事</strong><div id="sourceTitles"></div></div>
-    <details style="margin-top:18px;"><summary>参照記事一覧</summary><div id="details"></div></details>
+    <div class="sources"><strong>Referenced Articles</strong><div id="sourceTitles"></div></div>
+    <details style="margin-top:18px;"><summary>Referenced Articles List</summary><div id="details"></div></details>
   </section>
-  <section id="errorPanel" class="panel hidden"><h2>エラー</h2><div id="error" class="error"></div></section>
+  <section id="errorPanel" class="panel hidden"><h2>Error</h2><div id="error" class="error"></div></section>
 </main>
 
 <script>
-const askButton=document.getElementById("ask"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error");
+const askButton=document.getElementById("ask"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),searchMode=document.getElementById("searchMode"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error");
 function metric(name,value){{const box=document.createElement("div");box.className="metric";const n=document.createElement("div");n.className="metric-name";n.textContent=name;const v=document.createElement("div");v.className="metric-value";v.textContent=value;box.appendChild(n);box.appendChild(v);return box;}}
 
 async function loadModels(){{
   try{{
     const response=await fetch("/api/models",{{cache:"no-store"}});
     const data=await response.json();
-    if(!response.ok)throw new Error(data.error||"モデル一覧を取得できませんでした。");
+    if(!response.ok)throw new Error(data.error||"Failed to fetch model list.");
     
     model.innerHTML="";
     const defaultModelNorm = (data.default_model || "").toLowerCase();
@@ -177,22 +177,22 @@ async function loadModels(){{
     if(!data.models.length){{
       const option=document.createElement("option");
       option.value="";
-      option.textContent="Ollamaモデルがありません";
+      option.textContent="No Ollama models available";
       model.appendChild(option);
     }}
   }}catch(e){{
     model.innerHTML="";
     const option=document.createElement("option");
     option.value="";
-    option.textContent="モデル一覧取得失敗";
+    option.textContent="Failed to load models";
     model.appendChild(option);
     status.textContent=String(e);
   }}
 }}
 
-async function openArticle(title){{try{{const response=await fetch("/api/open_article",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{title}})}});const data=await response.json();if(!response.ok)throw new Error(data.error||"記事ビューアを起動できませんでした。");status.textContent=`記事ビューアを起動しました: ${{title}}`;}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="ビューア起動失敗";}}}}
-function showArticleLinks(results){{details.innerHTML="";const articles=new Map();for(const item of results){{const key=item.title;if(!articles.has(key))articles.set(key,{{title:item.title,matched:0,chunk_count:item.chunk_count}});articles.get(key).matched++;}}for(const item of articles.values()){{const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.title));const count=document.createElement("span");count.className="meta";count.textContent=`検索該当 ${{item.matched}}件 / 全${{item.chunk_count}}チャンク`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}}}
-async function ask(){{const q=question.value.trim();if(!q){{question.focus();return;}}if(!model.value){{status.textContent="回答モデルを選択してください。";return;}}askButton.disabled=true;status.textContent="検索・生成中...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{{const payload={{question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)}};const response=await fetch("/api/ask",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(payload)}});const data=await response.json();if(!response.ok)throw new Error(data.error||"処理に失敗しました。");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");showArticleLinks(data.results);metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("モデル",m.model));metrics.appendChild(metric("検索モード",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("検索時間",`${{m.search_seconds.toFixed(3)}} 秒`));metrics.appendChild(metric("生成時間",`${{m.generation_seconds.toFixed(3)}} 秒`));metrics.appendChild(metric("合計時間",`${{m.total_seconds.toFixed(3)}} 秒`));metrics.appendChild(metric("参考資料",`${{m.context_chars_used.toLocaleString()}} 文字`));metrics.appendChild(metric("検索結果",`${{m.result_count}} チャンク`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("入力トークン",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("出力トークン",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("生成速度",`${{m.eval_tokens_per_second.toFixed(2)}} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking量",`${{m.thinking_chars.toLocaleString()}} 文字`));if(m.done_reason)metrics.appendChild(metric("終了理由",m.done_reason));resultPanel.classList.remove("hidden");status.textContent="完了";}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="失敗";}}finally{{askButton.disabled=false;}}}}
+async function openArticle(title){{try{{const response=await fetch("/api/open_article",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{title}})}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Failed to launch article viewer.");status.textContent=`Launched article viewer: ${{title}}`;}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="Failed to launch viewer";}}}}
+function showArticleLinks(results){{details.innerHTML="";const articles=new Map();for(const item of results){{const key=item.title;if(!articles.has(key))articles.set(key,{{title:item.title,matched:0,chunk_count:item.chunk_count}});articles.get(key).matched++;}}for(const item of articles.values()){{const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.title));const count=document.createElement("span");count.className="meta";count.textContent=`Matched ${{item.matched}} / Total ${{item.chunk_count}} chunks`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}}}
+async function ask(){{const q=question.value.trim();if(!q){{question.focus();return;}}if(!model.value){{status.textContent="Please select a model.";return;}}askButton.disabled=true;status.textContent="Searching & Generating...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{{const payload={{question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)}};const response=await fetch("/api/ask",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(payload)}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Processing failed.");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");showArticleLinks(data.results);metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("Model",m.model));metrics.appendChild(metric("Search Mode",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("Search Time",`${{m.search_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Generation Time",`${{m.generation_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Total Time",`${{m.total_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Context Chars",`${{m.context_chars_used.toLocaleString()}} chars`));metrics.appendChild(metric("Search Results",`${{m.result_count}} chunks`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("Input Tokens",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("Output Tokens",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("Speed",`${{m.eval_tokens_per_second.toFixed(2)}} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking Chars",`${{m.thinking_chars.toLocaleString()}} chars`));if(m.done_reason)metrics.appendChild(metric("Done Reason",m.done_reason));resultPanel.classList.remove("hidden");status.textContent="Completed";}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="Failed";}}finally{{askButton.disabled=false;}}}}
 askButton.addEventListener("click",ask);question.addEventListener("keydown",e=>{{if(e.ctrlKey&&e.key==="Enter")ask();}});loadModels();
 </script>
 </body>
@@ -231,7 +231,7 @@ def make_context(
         body = "\n\n".join(
             f"[chunk {x.chunk_no + 1}/{x.chunk_count}]\n{x.text}" for x in chunks
         )
-        block = f"=== {label} ===\n記事名: {title}\n扱い: {label}\n\n{body}"
+        block = f"=== {label} ===\nTitle: {title}\nHandling: {label}\n\n{body}"
         allowed = min(budget, max_chars - used)
         if allowed <= 0:
             return
@@ -240,7 +240,7 @@ def make_context(
         titles.append(title)
         used += len(block)
 
-    append_group("最優先記事", primary_key, grouped[primary_key], primary_budget)
+    append_group("Primary Article", primary_key, grouped[primary_key], primary_budget)
 
     support_groups = groups[1:]
     if support_groups and support_budget > 0:
@@ -249,7 +249,7 @@ def make_context(
             if used >= max_chars:
                 break
             append_group(
-                "補助資料（質問対象と同一とは限らない）",
+                "Supplementary Material (May not be identical to question target)",
                 key,
                 chunks,
                 each,
@@ -282,7 +282,6 @@ class RagApplication:
 
             if name:
                 name_str = str(name)
-                # EXCLUDE_MODELS に指定されたキーワードを含むモデルを除外
                 if any(ex.lower() in name_str.lower() for ex in EXCLUDE_MODELS):
                     continue
                 names.append(name_str)
@@ -310,9 +309,9 @@ class RagApplication:
         )
 
         if not question:
-            raise ValueError("質問が空です。")
+            raise ValueError("Question is empty.")
         if not 1 <= top_k <= 40:
-            raise ValueError("検索件数は1～40で指定してください。")
+            raise ValueError("top_k must be between 1 and 40.")
         if search_mode not in {
             "auto",
             "legacy_auto",
@@ -321,17 +320,17 @@ class RagApplication:
             "discovery",
             "article_focus",
         }:
-            raise ValueError("検索モードが不正です。")
+            raise ValueError("Invalid search mode.")
         if not 1000 <= context_chars <= 100000:
-            raise ValueError("参考資料文字数は1,000～100,000で指定してください。")
+            raise ValueError("context_chars must be between 1,000 and 100,000.")
         if not 1024 <= num_ctx <= 131072:
-            raise ValueError("num_ctxは1,024～131,072で指定してください。")
+            raise ValueError("num_ctx must be between 1,024 and 131,072.")
         if not 64 <= num_predict <= 32768:
-            raise ValueError("num_predictは64～32,768で指定してください。")
+            raise ValueError("num_predict must be between 64 and 32,768.")
         if not 0 <= temperature <= 2:
-            raise ValueError("temperatureは0～2で指定してください。")
+            raise ValueError("temperature must be between 0 and 2.")
         if think_mode not in {"auto", "true", "false"}:
-            raise ValueError("Thinking指定が不正です。")
+            raise ValueError("Invalid thinking mode.")
 
         started = time.perf_counter()
         results = self.search_engine.search(
@@ -344,31 +343,31 @@ class RagApplication:
         if not results:
             if search_mode == "strict":
                 raise RuntimeError(
-                    "厳密検索で一致する記事タイトルが見つかりませんでした。"
+                    "No matching article titles found in strict search."
                 )
-            raise RuntimeError("関連するWikipedia記事が見つかりませんでした。")
+            raise RuntimeError("No relevant Wikipedia articles found.")
 
         context, source_titles, context_chars_used, primary_title = make_context(
             results,
             context_chars,
         )
 
-        prompt = f"""以下の参考資料を使って質問に回答してください。
+        prompt = f"""Please answer the question using the following reference materials.
 
-検索モード: {search_mode}
-最優先記事: {primary_title or "特定なし"}
+Search Mode: {search_mode}
+Primary Article: {primary_title or "Unspecified"}
 
-資料の扱い:
-1. 最優先記事を回答の中心にしてください。
-2. 補助資料は、質問対象と明確に関係する場合だけ使ってください。
-3. 別人物・別作品・別組織の情報を質問対象へ混ぜないでください。
-4. 資料にない具体的事実を補完しないでください。
-5. URLは書かず、実際に使った記事名だけを最後に列挙してください。
+Handling Guidelines:
+1. Base your answer primarily on the Primary Article.
+2. Use supplementary materials only if they are clearly related to the subject of the question.
+3. Do not mix information from different persons, works, or organizations into the target entity.
+4. Do not complement with specific facts not found in the material.
+5. Do not include URLs; list only the article titles actually used at the end.
 
-【参考資料】
+【Reference Materials】
 {context}
 
-【質問】
+【Question】
 {question}
 """
 
@@ -499,16 +498,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > 1_000_000:
-                raise ValueError("不正なリクエストサイズです。")
+                raise ValueError("Invalid request size.")
             request = json.loads(self.rfile.read(length).decode("utf-8"))
 
             if path == "/api/ask":
-                # バックエンド側のデフォルト値にも定義された定数を適用
                 result = self.app.ask(
                     question=str(request.get("question", "")),
                     model=str(request.get("model", self.app.default_model)),
                     top_k=int(request.get("top_k", DEFAULT_TOP_K)),
-                    search_mode=str(request.get("search_mode", "auto")),
+                    search_mode=str(request.get("search_mode", "article_focus")),
                     think_mode=str(request.get("think", "auto")),
                     context_chars=int(
                         request.get("context_chars", self.app.context_chars)
@@ -523,14 +521,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/open_article":
                 title = str(request.get("title", "")).strip()
                 if not title:
-                    raise ValueError("記事タイトルが空です。")
+                    raise ValueError("Article title is empty.")
                 if not VIEWER_SCRIPT.is_file():
                     raise FileNotFoundError(
-                        f"ビューアが見つかりません: {VIEWER_SCRIPT}"
+                        f"Viewer script not found: {VIEWER_SCRIPT}"
                     )
                 if not VIEWER_DB.is_file():
                     raise FileNotFoundError(
-                        f"記事データベースが見つかりません: {VIEWER_DB}"
+                        f"Article database not found: {VIEWER_DB}"
                     )
 
                 subprocess.Popen(
@@ -597,9 +595,9 @@ def main() -> int:
     args = parse_args()
     index_dir = args.index.resolve()
     if not index_dir.is_dir():
-        print(f"インデックスが見つかりません: {index_dir}", file=sys.stderr)
+        print(f"Index directory not found: {index_dir}", file=sys.stderr)
         print(
-            "別の場所にある場合は --index <インデックスフォルダ> を指定してください。",
+            "If located elsewhere, please specify using --index <index_folder>",
             file=sys.stderr,
         )
         return 1
@@ -613,13 +611,13 @@ def main() -> int:
     print(f"URL:   http://{args.host}:{args.port}")
     print(f"Index: {index_dir}")
     print(f"Model: {args.model}")
-    print("終了: Ctrl+C")
+    print("Quit: Ctrl+C")
     print("=" * 68)
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n終了します。")
+        print("\nExiting.")
     finally:
         server.server_close()
     return 0

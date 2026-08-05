@@ -25,6 +25,7 @@ data/*
 index/*
 sample/*
 logs/*
+tools/kwix/*
 
 !data/00_build_wikipedia_jsonl.py
 
@@ -50,3 +51,6 @@ logs/*
 # Temporary files
 *.tmp
 *.bak
+
+# for kiwix
+*.zim

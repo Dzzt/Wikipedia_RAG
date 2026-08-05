@@ -8,11 +8,13 @@ A fully local Wikipedia RAG Web UI that runs without additional dependencies.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
-import subprocess
 import sys
+import threading
 import time
 import traceback
+import webbrowser
 from collections import defaultdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +22,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import ollama
+from raglib.article_viewer import KiwixServer
+from raglib.article_viewer import open_article as launch_article_viewer
 from raglib.search_engine import SearchEngine
 
 DEFAULT_HOST = "127.0.0.1"
@@ -54,8 +58,6 @@ EXCLUDE_MODELS = {
 }
 
 BASE_DIR = Path(__file__).resolve().parent
-VIEWER_SCRIPT = BASE_DIR / "wikipedia_viewer" / "wikipedia_jsonl_viewer.py"
-VIEWER_DB = BASE_DIR / "wikipedia_viewer" / "wikipedia_articles.sqlite3"
 
 HTML = f'''<!doctype html>
 <html lang="en">
@@ -83,6 +85,7 @@ textarea,select,input[type=number] {{ width:100%; border:1px solid var(--border)
 textarea {{ min-height:120px; resize:vertical; }}
 button {{ border:0; border-radius:8px; padding:11px 18px; font:inherit; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }}
 button:disabled {{ opacity:.55; cursor:wait; }}
+.quit-button {{ margin-left:auto; background:#a93226; }}
 .actions {{ display:flex; align-items:center; gap:14px; margin-top:14px; }}
 .status {{ color:var(--muted); font-size:inherit; }}
 .answer {{ white-space:pre-wrap; line-height:1.75; background:var(--answer); border-radius:10px; padding:18px; font-size:14px; }}
@@ -127,7 +130,7 @@ button:disabled {{ opacity:.55; cursor:wait; }}
       <div><label for="numPredict">num_predict</label><input id="numPredict" type="number" value="{DEFAULT_NUM_PREDICT}" min="64" max="32768" step="64"></div>
       <div><label for="temperature">temperature</label><input id="temperature" type="number" value="{DEFAULT_TEMPERATURE}" min="0" max="2" step="0.05"></div>
     </div>
-    <div class="actions"><button id="ask">Ask</button><span id="status" class="status"></span></div>
+    <div class="actions"><button id="ask">Ask</button><span id="status" class="status"></span><button id="quit" class="quit-button" type="button">Wikipedia RAGを終了</button></div>
   </section>
   <section id="resultPanel" class="panel hidden">
     <h2>Answer</h2><div id="answer" class="answer"></div>
@@ -139,7 +142,7 @@ button:disabled {{ opacity:.55; cursor:wait; }}
 </main>
 
 <script>
-const askButton=document.getElementById("ask"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),searchMode=document.getElementById("searchMode"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error");
+const askButton=document.getElementById("ask"),quitButton=document.getElementById("quit"),question=document.getElementById("question"),model=document.getElementById("model"),topk=document.getElementById("topk"),searchMode=document.getElementById("searchMode"),think=document.getElementById("think"),contextChars=document.getElementById("contextChars"),numCtx=document.getElementById("numCtx"),numPredict=document.getElementById("numPredict"),temperature=document.getElementById("temperature"),status=document.getElementById("status"),resultPanel=document.getElementById("resultPanel"),errorPanel=document.getElementById("errorPanel"),answer=document.getElementById("answer"),sourceTitles=document.getElementById("sourceTitles"),details=document.getElementById("details"),metrics=document.getElementById("metrics"),error=document.getElementById("error");
 function metric(name,value){{const box=document.createElement("div");box.className="metric";const n=document.createElement("div");n.className="metric-name";n.textContent=name;const v=document.createElement("div");v.className="metric-value";v.textContent=value;box.appendChild(n);box.appendChild(v);return box;}}
 
 async function loadModels(){{
@@ -190,9 +193,10 @@ async function loadModels(){{
 }}
 
 async function openArticle(title){{try{{const response=await fetch("/api/open_article",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{title}})}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Failed to launch article viewer.");status.textContent=`Launched article viewer: ${{title}}`;}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="Failed to launch viewer";}}}}
-function showArticleLinks(results){{details.innerHTML="";const articles=new Map();for(const item of results){{const key=item.title;if(!articles.has(key))articles.set(key,{{title:item.title,matched:0,chunk_count:item.chunk_count}});articles.get(key).matched++;}}for(const item of articles.values()){{const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.title));const count=document.createElement("span");count.className="meta";count.textContent=`Matched ${{item.matched}} / Total ${{item.chunk_count}} chunks`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}}}
-async function ask(){{const q=question.value.trim();if(!q){{question.focus();return;}}if(!model.value){{status.textContent="Please select a model.";return;}}askButton.disabled=true;status.textContent="Searching & Generating...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{{const payload={{question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)}};const response=await fetch("/api/ask",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(payload)}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Processing failed.");answer.textContent=data.answer;sourceTitles.textContent=data.source_titles.join(" / ");showArticleLinks(data.results);metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("Model",m.model));metrics.appendChild(metric("Search Mode",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("Search Time",`${{m.search_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Generation Time",`${{m.generation_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Total Time",`${{m.total_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Context Chars",`${{m.context_chars_used.toLocaleString()}} chars`));metrics.appendChild(metric("Search Results",`${{m.result_count}} chunks`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("Input Tokens",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("Output Tokens",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("Speed",`${{m.eval_tokens_per_second.toFixed(2)}} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking Chars",`${{m.thinking_chars.toLocaleString()}} chars`));if(m.done_reason)metrics.appendChild(metric("Done Reason",m.done_reason));resultPanel.classList.remove("hidden");status.textContent="Completed";}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="Failed";}}finally{{askButton.disabled=false;}}}}
-askButton.addEventListener("click",ask);question.addEventListener("keydown",e=>{{if(e.ctrlKey&&e.key==="Enter")ask();}});loadModels();
+async function quitApplication(){{if(!confirm("Wikipedia RAGを終了しますか？"))return;quitButton.disabled=true;askButton.disabled=true;status.textContent="終了しています…";try{{await fetch("/api/shutdown",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:"{{}}"}});document.body.innerHTML='<main><section class="panel"><h2>Wikipedia RAGを終了しました</h2><p>このタブは閉じて構いません。</p></section></main>';}}catch(e){{status.textContent="Wikipedia RAGは終了しました。このタブを閉じてください。";}}}}
+function showArticleLinks(results){{details.innerHTML="";sourceTitles.innerHTML="";const articles=new Map();for(const item of results){{const key=item.title;if(!articles.has(key))articles.set(key,{{title:item.title,matched:0,chunk_count:item.chunk_count}});articles.get(key).matched++;}}for(const item of articles.values()){{const titleButton=document.createElement("button");titleButton.type="button";titleButton.className="article-button";titleButton.textContent=item.title;titleButton.addEventListener("click",()=>openArticle(item.title));if(sourceTitles.childNodes.length)sourceTitles.appendChild(document.createTextNode(" / "));sourceTitles.appendChild(titleButton);const card=document.createElement("div");card.className="source-card";const row=document.createElement("div");row.className="article-row";const button=document.createElement("button");button.type="button";button.className="article-button";button.textContent=item.title;button.addEventListener("click",()=>openArticle(item.title));const count=document.createElement("span");count.className="meta";count.textContent=`Matched ${{item.matched}} / Total ${{item.chunk_count}} chunks`;row.appendChild(button);row.appendChild(count);card.appendChild(row);details.appendChild(card);}}}}
+async function ask(){{const q=question.value.trim();if(!q){{question.focus();return;}}if(!model.value){{status.textContent="Please select a model.";return;}}askButton.disabled=true;status.textContent="Searching & Generating...";resultPanel.classList.add("hidden");errorPanel.classList.add("hidden");try{{const payload={{question:q,model:model.value,top_k:Number(topk.value),search_mode:searchMode.value,think:think.value,context_chars:Number(contextChars.value),num_ctx:Number(numCtx.value),num_predict:Number(numPredict.value),temperature:Number(temperature.value)}};const response=await fetch("/api/ask",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(payload)}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Processing failed.");answer.textContent=data.answer;showArticleLinks(data.results);metrics.innerHTML="";const m=data.metrics;metrics.appendChild(metric("Model",m.model));metrics.appendChild(metric("Search Mode",m.search_mode));metrics.appendChild(metric("Thinking",m.think));metrics.appendChild(metric("Search Time",`${{m.search_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Generation Time",`${{m.generation_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Total Time",`${{m.total_seconds.toFixed(3)}} s`));metrics.appendChild(metric("Context Chars",`${{m.context_chars_used.toLocaleString()}} chars`));metrics.appendChild(metric("Search Results",`${{m.result_count}} chunks`));metrics.appendChild(metric("num_ctx",String(m.num_ctx)));metrics.appendChild(metric("num_predict",String(m.num_predict)));metrics.appendChild(metric("temperature",String(m.temperature)));if(m.prompt_eval_count!=null)metrics.appendChild(metric("Input Tokens",String(m.prompt_eval_count)));if(m.eval_count!=null)metrics.appendChild(metric("Output Tokens",String(m.eval_count)));if(m.eval_tokens_per_second!=null)metrics.appendChild(metric("Speed",`${{m.eval_tokens_per_second.toFixed(2)}} tok/s`));if(m.thinking_chars!=null)metrics.appendChild(metric("Thinking Chars",`${{m.thinking_chars.toLocaleString()}} chars`));if(m.done_reason)metrics.appendChild(metric("Done Reason",m.done_reason));resultPanel.classList.remove("hidden");status.textContent="Completed";}}catch(e){{error.textContent=String(e);errorPanel.classList.remove("hidden");status.textContent="Failed";}}finally{{askButton.disabled=false;}}}}
+askButton.addEventListener("click",ask);quitButton.addEventListener("click",quitApplication);question.addEventListener("keydown",e=>{{if(e.ctrlKey&&e.key==="Enter")ask();}});loadModels();
 </script>
 </body>
 </html>'''
@@ -259,11 +263,31 @@ def make_context(
 
 
 class RagApplication:
-    def __init__(self, index_dir: Path, default_model: str, context_chars: int) -> None:
+    def __init__(
+        self,
+        index_dir: Path,
+        default_model: str,
+        context_chars: int,
+        viewer: str,
+        kiwix_url: str,
+        kiwix_zim: str,
+    ) -> None:
         self.index_dir = index_dir
         self.default_model = default_model
         self.context_chars = context_chars
+        self.viewer = viewer
+        self.kiwix_url = kiwix_url
+        self.kiwix_zim = kiwix_zim
         self.search_engine = SearchEngine(index_dir)
+
+    def open_article(self, title: str) -> None:
+        launch_article_viewer(
+            viewer=self.viewer,
+            title=title,
+            base_dir=BASE_DIR,
+            kiwix_url=self.kiwix_url,
+            kiwix_zim=self.kiwix_zim,
+        )
 
     def list_models(self) -> list[str]:
         response = ollama.list()
@@ -471,6 +495,7 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "index": str(self.app.index_dir),
                     "model": self.app.default_model,
+                    "viewer": self.app.viewer,
                 }
             )
             return
@@ -519,23 +544,23 @@ class Handler(BaseHTTPRequestHandler):
                 title = str(request.get("title", "")).strip()
                 if not title:
                     raise ValueError("Article title is empty.")
-                if not VIEWER_SCRIPT.is_file():
-                    raise FileNotFoundError(f"Viewer script not found: {VIEWER_SCRIPT}")
-                if not VIEWER_DB.is_file():
-                    raise FileNotFoundError(f"Article database not found: {VIEWER_DB}")
-
-                subprocess.Popen(
-                    [
-                        "py",
-                        str(VIEWER_SCRIPT),
-                        "--db",
-                        str(VIEWER_DB),
-                        "--title",
-                        title,
-                    ],
-                    cwd=str(BASE_DIR),
+                self.app.open_article(title)
+                self.send_json(
+                    {
+                        "ok": True,
+                        "title": title,
+                        "viewer": self.app.viewer,
+                    }
                 )
-                self.send_json({"ok": True, "title": title})
+                return
+
+            if path == "/api/shutdown":
+                self.send_json({"ok": True})
+                threading.Thread(
+                    target=self.server.shutdown,
+                    name="rag-shutdown",
+                    daemon=True,
+                ).start()
                 return
 
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -581,6 +606,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--index", type=Path, default=DEFAULT_INDEX)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--context-chars", type=int, default=DEFAULT_CONTEXT_CHARS)
+    parser.add_argument(
+        "--viewer",
+        choices=("internal", "kiwix"),
+        default="internal",
+        help="Article viewer (default: internal)",
+    )
+    parser.add_argument(
+        "--kiwix-url",
+        default="http://127.0.0.1:8080",
+        help="Kiwix Server URL",
+    )
+    parser.add_argument(
+        "--kiwix-zim",
+        default="wikipedia_ja_all",
+        help="ZIM name exposed by Kiwix Server",
+    )
+    parser.add_argument(
+        "--kiwix-executable",
+        type=Path,
+        default=Path("kiwix/kiwix-serve.exe"),
+        help="Path to kiwix-serve.exe",
+    )
+    parser.add_argument(
+        "--kiwix-zim-file",
+        type=Path,
+        help="Path to the Wikipedia ZIM file (required for --viewer kiwix)",
+    )
+    parser.add_argument(
+        "--open-browser",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Open the RAG UI in the default browser (default: enabled)",
+    )
     return parser.parse_args()
 
 
@@ -595,7 +653,36 @@ def main() -> int:
         )
         return 1
 
-    app = RagApplication(index_dir, args.model, args.context_chars)
+    kiwix_server = None
+    if args.viewer == "kiwix":
+        if args.kiwix_zim_file is None:
+            print(
+                "--viewer kiwixには--kiwix-zim-fileが必要です。",
+                file=sys.stderr,
+            )
+            return 1
+        kiwix_server = KiwixServer(
+            executable=args.kiwix_executable,
+            zim_file=args.kiwix_zim_file,
+            host="127.0.0.1",
+            port=urlparse(args.kiwix_url).port or 8080,
+        )
+        print("Starting Kiwix Server...")
+        try:
+            kiwix_server.start()
+        except Exception as exc:
+            print(f"Kiwix Serverを起動できません: {exc}", file=sys.stderr)
+            return 1
+        atexit.register(kiwix_server.stop)
+
+    app = RagApplication(
+        index_dir=index_dir,
+        default_model=args.model,
+        context_chars=args.context_chars,
+        viewer=args.viewer,
+        kiwix_url=args.kiwix_url,
+        kiwix_zim=args.kiwix_zim,
+    )
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.app = app  # type: ignore[attr-defined]
 
@@ -604,8 +691,18 @@ def main() -> int:
     print(f"URL:   http://{args.host}:{args.port}")
     print(f"Index: {index_dir}")
     print(f"Model: {args.model}")
+    print(f"Viewer: {args.viewer}")
+    if args.viewer == "kiwix":
+        print(f"Kiwix URL: {args.kiwix_url}")
+        print(f"Kiwix ZIM: {args.kiwix_zim}")
     print("Quit: Ctrl+C")
     print("=" * 68)
+
+    if args.open_browser:
+        threading.Timer(
+            0.4,
+            lambda: webbrowser.open(f"http://{args.host}:{args.port}", new=2),
+        ).start()
 
     try:
         server.serve_forever()
@@ -613,6 +710,9 @@ def main() -> int:
         print("\nExiting.")
     finally:
         server.server_close()
+        if kiwix_server is not None:
+            print("Stopping Kiwix Server...")
+            kiwix_server.stop()
     return 0
 
 

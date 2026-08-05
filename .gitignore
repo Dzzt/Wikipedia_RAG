@@ -26,6 +26,8 @@ index/*
 sample/*
 logs/*
 
+!data/00_build_wikipedia_jsonl.py
+
 # Keep directory structure
 !data/.gitkeep
 !index/.gitkeep

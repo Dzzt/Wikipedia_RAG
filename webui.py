@@ -26,16 +26,17 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_INDEX = Path("index")
 
-DEFAULT_MODEL = "Mistral-Nemo-Japanese"
+DEFAULT_MODEL = "TouryuTamane/gemma3-jp"
 
 DEFAULT_TOP_K = 8
 DEFAULT_CONTEXT_CHARS = 10000
 DEFAULT_CONTEXT_LENGTH = 8192
-DEFAULT_NUM_PREDICT = 3072
+DEFAULT_NUM_PREDICT = 2048
 DEFAULT_TEMPERATURE = 0.5
 SYSTEM_PROMPT = """
-あなたは日本語のWikipedia参考資料に基づいて質問に答えるアシスタントである。
+あなたは与えられた日本語のWikipedia参考資料に基づいて質問に答えるアシスタントである。
 遵守すべき厳格なルール:
+- 常に学習結果よりも与えられた資料を優先すること
 - 情報を要約しすぎるな。
 - 質問に直接関連する参考資料を中心に回答を作成せよ。
 - メインとなる記事が指定されている場合は、その記事を中心に回答せよ。

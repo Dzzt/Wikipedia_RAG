@@ -81,6 +81,26 @@ def compact_title(value: str) -> str:
     return "".join(ch for ch in value if ch.isalnum())
 
 
+def alnum_boundary_title(value: str) -> str:
+    """Normalize width/case/spacing and ignore spaces only at ASCII letter-number boundaries."""
+    value = normalize_title(value)
+    value = re.sub(r"(?<=[a-z])\s+(?=[0-9])", "", value)
+    value = re.sub(r"(?<=[0-9])\s+(?=[a-z])", "", value)
+    return value
+
+
+def alnum_boundary_variants(value: str) -> set[str]:
+    """Generate indexed-title forms for cases such as Fallout3/Fallout 3."""
+    normalized = normalize_title(value)
+    variants = {normalized}
+    variants.add(re.sub(r"(?<=[a-z])\s+(?=[0-9])", "", normalized))
+    variants.add(re.sub(r"(?<=[0-9])\s+(?=[a-z])", "", normalized))
+    spaced = re.sub(r"(?<=[a-z])(?=[0-9])", " ", normalized)
+    spaced = re.sub(r"(?<=[0-9])(?=[a-z])", " ", spaced)
+    variants.add(spaced)
+    return {item for item in variants if item}
+
+
 def fts_phrase(value: str) -> str:
     """Quote a value safely for an FTS5 phrase query."""
     return '"' + value.replace('"', '""') + '"'
@@ -274,10 +294,15 @@ class SearchEngine:
         return boosts, sources, exact_articles
 
     def _detect_article_focus(self, query: str) -> tuple[str, str, str] | None:
-        """Find an exact article title at the beginning of a natural-language query.
+        """Find an article title at the beginning of a natural-language query.
 
-        Returns (article_id, title, residual_query). This is deliberately
-        conservative so the normal search remains the fallback.
+        Matching is attempted in three stages:
+        1. normalized exact match;
+        2. ASCII letter-number boundary match (Fallout3 == Fallout 3);
+        3. unique compact match that ignores spaces and punctuation.
+
+        Returns (article_id, title, residual_query). The broader stages are
+        deliberately conservative so ordinary semantic search remains the fallback.
         """
         normalized = normalize_title(query)
         candidates = [normalized]
@@ -294,23 +319,19 @@ class SearchEngine:
                     candidates.append(candidate)
                 start = pos + len(marker)
 
-        # Prefer the longest exact title candidate.
-        for candidate in sorted(set(candidates), key=len, reverse=True):
-            row = self.connection.execute(
-                "SELECT article_id, title FROM chunks "
-                "WHERE normalized_title=? ORDER BY chunk_no LIMIT 1",
-                (candidate,),
-            ).fetchone()
-            if row is None:
-                continue
-
-            article_id, title = str(row[0]), str(row[1])
+        def finish(article_id: str, title: str, candidate: str) -> tuple[str, str, str]:
             residual = normalized
+            candidate_norm = normalize_title(candidate)
             title_norm = normalize_title(title)
-            if residual.startswith(title_norm):
-                residual = residual[len(title_norm):].strip()
-            residual = residual.lstrip("のをについて、,。 　")
 
+            # Remove the actually typed prefix first. This also works when the
+            # canonical title contains spaces or punctuation absent from the query.
+            if residual.startswith(candidate_norm):
+                residual = residual[len(candidate_norm):].strip()
+            elif residual.startswith(title_norm):
+                residual = residual[len(title_norm):].strip()
+
+            residual = residual.lstrip("のをについて、,。 　")
             changed = True
             while changed and residual:
                 changed = False
@@ -319,8 +340,75 @@ class SearchEngine:
                         residual = residual[:-len(suffix)].strip()
                         changed = True
                         break
-
             return article_id, title, residual or title
+
+        ordered = sorted(set(candidates), key=len, reverse=True)
+
+        # Stage 1: indexed normalized exact match.
+        for candidate in ordered:
+            row = self.connection.execute(
+                "SELECT article_id, title FROM chunks "
+                "WHERE normalized_title=? ORDER BY chunk_no LIMIT 1",
+                (candidate,),
+            ).fetchone()
+            if row is not None:
+                return finish(str(row[0]), str(row[1]), candidate)
+
+        # Stage 2: ignore only spaces at ASCII letter-number boundaries.
+        # Query a small set of index-friendly variants, then verify equivalence.
+        for candidate in ordered:
+            variants = sorted(alnum_boundary_variants(candidate))
+            placeholders = ",".join("?" for _ in variants)
+            rows = self.connection.execute(
+                f"SELECT article_id, title, normalized_title FROM chunks "
+                f"WHERE normalized_title IN ({placeholders}) "
+                "GROUP BY article_id, title, normalized_title LIMIT 20",
+                variants,
+            ).fetchall()
+            matches = [
+                (str(row[0]), str(row[1]))
+                for row in rows
+                if alnum_boundary_title(str(row[2])) == alnum_boundary_title(candidate)
+            ]
+            unique = list(dict.fromkeys(matches))
+            if len(unique) == 1:
+                return finish(unique[0][0], unique[0][1], candidate)
+
+        # Stage 3: unique compact match. Use title FTS only to bound candidates,
+        # then verify after removing spaces and punctuation. Short compact keys are
+        # excluded because collisions become common.
+        for candidate in ordered:
+            compact = compact_title(candidate)
+            if len(compact) < 5:
+                continue
+
+            fragments = re.findall(
+                r"[0-9A-Za-z]{3,}|[\u3040-\u30ff\u3400-\u9fff]{3,}",
+                unicodedata.normalize("NFKC", candidate),
+            )
+            if not fragments:
+                continue
+            fragments.sort(key=len, reverse=True)
+            broad_query = " AND ".join(fts_phrase(x) for x in fragments[:4])
+            try:
+                rows = self.connection.execute(
+                    "SELECT c.article_id, c.title "
+                    "FROM title_fts f JOIN chunks c ON c.chunk_id=f.chunk_id "
+                    "WHERE title_fts MATCH ? "
+                    "GROUP BY c.article_id, c.title LIMIT 2000",
+                    (broad_query,),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+
+            matches = [
+                (str(row[0]), str(row[1]))
+                for row in rows
+                if compact_title(str(row[1])) == compact
+            ]
+            unique = list(dict.fromkeys(matches))
+            if len(unique) == 1:
+                return finish(unique[0][0], unique[0][1], candidate)
 
         return None
 

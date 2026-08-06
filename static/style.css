@@ -213,3 +213,33 @@ button:disabled {
         grid-template-columns: 1fr;
     }
 }
+/* ---- 追記・変更部分 ---- */
+
+.header-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end; /* 下揃えに指定 */
+    margin-bottom: 20px;   /* panelとの間の余白 */
+}
+
+.subtitle {
+    margin-bottom: 0;      /* コンテナ側でマージンを調整するため0にする */
+    color: var(--muted);
+}
+
+.quit-button {
+    /* 不要となった margin-left: auto; を削除/上書き */
+    margin-left: 0;
+    background: #a93226;
+    
+    /* フォントサイズを小さく (標準の12pxの約2/3サイズ) */
+    font-size: 9.5px;
+    
+    /* パディング（内側の余白）を小さく調整 */
+    padding: 5px 10px;
+    
+    /* 角丸も少し小さめに調整（お好みで） */
+    border-radius: 5px;
+}
+
+/* ------------------------ */

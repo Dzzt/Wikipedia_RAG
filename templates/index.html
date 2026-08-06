@@ -8,8 +8,14 @@
 </head>
 <body>
     <main>
-        <h1>Wikipedia RAG</h1>
-        <div class="subtitle">ruri-v3-m310 + FAISS + Ollama. Local execution only.</div>
+        <!-- ヘッダーエリア：タイトル、サブタイトル、Quitボタンを配置 -->
+        <header class="header-container">
+            <div class="header-text">
+                <h1>Wikipedia RAG</h1>
+                <div class="subtitle">ruri-v3-m310 + FAISS + Ollama. Local execution only.</div>
+            </div>
+            <button id="quit" class="quit-button" type="button">Quit</button>
+        </header>
 
         <section class="panel">
             <div class="grid">
@@ -74,10 +80,10 @@
                 </div>
             </div>
 
+            <!-- もともとQuitがあった場所にAskボタンを配置 -->
             <div class="actions">
                 <button id="ask">Ask</button>
                 <span id="status" class="status"></span>
-                <button id="quit" class="quit-button" type="button">Quit</button>
             </div>
         </section>
 

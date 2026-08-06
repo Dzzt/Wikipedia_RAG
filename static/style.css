@@ -49,11 +49,48 @@ h2 {
     margin-top: 0;
 }
 
-.subtitle {
+/* ヘッダー */
+.header-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
     margin-bottom: 20px;
+}
+
+.subtitle {
+    margin-bottom: 0;
     color: var(--muted);
 }
 
+.quit-button {
+    margin-left: 0;
+    
+    /* 背景と枠線を完全に見えなく（透明）にする */
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    
+    /* 文字色（控えめなグレーなどに設定するか、赤系の色のままでも可） */
+    color: var(--muted);
+    
+    /* フォントサイズとパディングの調整 */
+    font-size: 11px;
+    padding: 4px 6px;
+    
+    /* ホバー時のカーソル */
+    cursor: pointer;
+    
+    /* クリック時の選択青枠などを消す（お好みで） */
+    outline: none;
+}
+
+/* マウスを載せた時に少し強調・下線を表示する（お好みで調整） */
+.quit-button:hover {
+    color: #a93226; /* または var(--text) など */
+    text-decoration: underline;
+}
+
+/* パネル基本設定 */
 .panel {
     margin-bottom: 18px;
     padding: 18px;
@@ -63,54 +100,60 @@ h2 {
     font-size: 12px;
 }
 
-.grid {
+/* RAGフォーム（Question, Model, TopK, Askボタンのグリッドレイアウト） */
+.rag-form {
     display: grid;
+    grid-template-areas:
+        "question model topk"
+        "question actions actions"
+        "params   params  params";
     grid-template-columns: minmax(300px, 1fr) 250px 120px;
     gap: 12px;
 }
 
-.params {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(120px, 1fr));
+.field-question {
+    grid-area: question;
+    display: flex;
+    flex-direction: column;
+}
+
+.field-question textarea {
+    flex: 1;
+    min-height: 120px;
+    resize: vertical;
+}
+
+.field-model {
+    grid-area: model;
+}
+
+.field-topk {
+    grid-area: topk;
+}
+
+/* AskボタンをTop Kの下（Questionの右下の隙間）に配置 */
+.actions {
+    grid-area: actions;
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-end;
     gap: 12px;
-    margin-top: 14px;
 }
 
-.metrics {
+/* パラメータエリア (下段6列) */
+.params {
+    grid-area: params;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-    gap: 8px;
-    margin-top: 14px;
+    grid-template-columns: repeat(6, minmax(100px, 1fr));
+    gap: 12px;
+    margin-top: 6px;
 }
 
-.metric,
-.source-card {
-    padding: 9px 11px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--source);
-}
-
-.metric-name,
-.meta,
-label {
-    color: var(--muted);
-}
-
-.metric-name,
-.meta {
-    font-size: 9px;
-}
-
-.metric-value {
-    margin-top: 3px;
-    font-weight: 600;
-    word-break: break-word;
-}
-
+/* フォーム要素 */
 label {
     display: block;
     margin-bottom: 5px;
+    color: var(--muted);
 }
 
 textarea,
@@ -123,11 +166,6 @@ input[type="number"] {
     background: transparent;
     color: inherit;
     font: inherit;
-}
-
-textarea {
-    min-height: 120px;
-    resize: vertical;
 }
 
 button {
@@ -146,28 +184,36 @@ button:disabled {
     cursor: wait;
 }
 
-.actions,
-.article-row {
-    display: flex;
-    align-items: center;
-    gap: 14px;
+.status {
+    color: var(--muted);
 }
 
-.actions {
+/* メトリクス・結果表示エリア */
+.metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 8px;
     margin-top: 14px;
 }
 
-.article-row {
-    justify-content: space-between;
+.metric,
+.source-card {
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--source);
 }
 
-.quit-button {
-    margin-left: auto;
-    background: #a93226;
-}
-
-.status {
+.metric-name,
+.meta {
     color: var(--muted);
+    font-size: 9px;
+}
+
+.metric-value {
+    margin-top: 3px;
+    font-weight: 600;
+    word-break: break-word;
 }
 
 .answer {
@@ -185,6 +231,13 @@ button:disabled {
 
 .source-card {
     margin-top: 10px;
+}
+
+.article-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
 }
 
 .article-button {
@@ -207,39 +260,19 @@ button:disabled {
     white-space: pre-wrap;
 }
 
+/* スマホ表示時のレスポンシブ対応 */
 @media (max-width: 760px) {
-    .grid,
-    .params {
+    .rag-form {
+        grid-template-areas:
+            "question"
+            "model"
+            "topk"
+            "actions"
+            "params";
         grid-template-columns: 1fr;
     }
-}
-/* ---- 追記・変更部分 ---- */
 
-.header-container {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end; /* 下揃えに指定 */
-    margin-bottom: 20px;   /* panelとの間の余白 */
+    .params {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
-
-.subtitle {
-    margin-bottom: 0;      /* コンテナ側でマージンを調整するため0にする */
-    color: var(--muted);
-}
-
-.quit-button {
-    /* 不要となった margin-left: auto; を削除/上書き */
-    margin-left: 0;
-    background: #a93226;
-    
-    /* フォントサイズを小さく (標準の12pxの約2/3サイズ) */
-    font-size: 9.5px;
-    
-    /* パディング（内側の余白）を小さく調整 */
-    padding: 5px 10px;
-    
-    /* 角丸も少し小さめに調整（お好みで） */
-    border-radius: 5px;
-}
-
-/* ------------------------ */

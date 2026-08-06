@@ -8,7 +8,7 @@
 </head>
 <body>
     <main>
-        <!-- ヘッダーエリア：タイトル、サブタイトル、Quitボタンを配置 -->
+        <!-- ヘッダーエリア -->
         <header class="header-container">
             <div class="header-text">
                 <h1>Wikipedia RAG</h1>
@@ -17,26 +17,34 @@
             <button id="quit" class="quit-button" type="button">Quit</button>
         </header>
 
-        <section class="panel">
-            <div class="grid">
-                <div>
-                    <label for="question">Question</label>
-                    <textarea id="question" placeholder="Enter prompt..."></textarea>
-                </div>
-
-                <div>
-                    <label for="model">Model</label>
-                    <select id="model">
-                        <option value="">Fetching model list...</option>
-                    </select>
-                </div>
-
-                <div>
-                    <label for="topk">Top K</label>
-                    <input id="topk" type="number" min="1" max="40">
-                </div>
+        <!-- メイン設定パネル -->
+        <section class="panel rag-form">
+            <!-- 左側: Question -->
+            <div class="field-question">
+                <label for="question">Question</label>
+                <textarea id="question" placeholder="Enter prompt..."></textarea>
             </div>
 
+            <!-- 右側上部: Model, Top K -->
+            <div class="field-model">
+                <label for="model">Model</label>
+                <select id="model">
+                    <option value="">Fetching model list...</option>
+                </select>
+            </div>
+
+            <div class="field-topk">
+                <label for="topk">Top K</label>
+                <input id="topk" type="number" min="1" max="40">
+            </div>
+
+            <!-- 右側下部 (Question横の隙間エリア): Askボタンとステータス -->
+            <div class="actions">
+                <span id="status" class="status"></span>
+                <button id="ask" type="button">Ask</button>
+            </div>
+
+            <!-- パラメータ詳細エリア (下段に水平展開) -->
             <div class="params">
                 <div>
                     <label for="searchMode">Search mode</label>
@@ -79,14 +87,9 @@
                     <input id="temperature" type="number" min="0" max="2" step="0.05">
                 </div>
             </div>
-
-            <!-- もともとQuitがあった場所にAskボタンを配置 -->
-            <div class="actions">
-                <button id="ask">Ask</button>
-                <span id="status" class="status"></span>
-            </div>
         </section>
 
+        <!-- 結果表示パネル -->
         <section id="resultPanel" class="panel hidden">
             <h2>Answer</h2>
             <div id="answer" class="answer"></div>
@@ -98,6 +101,7 @@
             </details>
         </section>
 
+        <!-- エラー表示パネル -->
         <section id="errorPanel" class="panel hidden">
             <h2>Error</h2>
             <div id="error" class="error"></div>

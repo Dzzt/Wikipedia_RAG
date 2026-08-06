@@ -1,1 +1,0 @@
-py .\wikipedia_viewer\wikipedia_jsonl_viewer.py --db ".\wikipedia_viewer\wikipedia_articles.sqlite3"

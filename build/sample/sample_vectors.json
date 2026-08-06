@@ -1,0 +1,7 @@
+{
+  "count": 500000,
+  "dimension": 768,
+  "vectors": "sample\\sample_vectors.f32",
+  "ids": "sample\\sample_ids.i64",
+  "elapsed_seconds": 15775.030281100015
+}

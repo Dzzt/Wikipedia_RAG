@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wikipedia RAG</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <main>
+        <h1>Wikipedia RAG</h1>
+        <div class="subtitle">ruri-v3-m310 + FAISS + Ollama. Local execution only.</div>
+
+        <section class="panel">
+            <div class="grid">
+                <div>
+                    <label for="question">Question</label>
+                    <textarea id="question" placeholder="Enter prompt..."></textarea>
+                </div>
+
+                <div>
+                    <label for="model">Model</label>
+                    <select id="model">
+                        <option value="">Fetching model list...</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="topk">Top K</label>
+                    <input id="topk" type="number" min="1" max="40">
+                </div>
+            </div>
+
+            <div class="params">
+                <div>
+                    <label for="searchMode">Search mode</label>
+                    <select id="searchMode">
+                        <option value="auto">auto</option>
+                        <option value="legacy_auto">legacy</option>
+                        <option value="strict">strict</option>
+                        <option value="balanced">balanced</option>
+                        <option value="discovery">discovery</option>
+                        <option value="article_focus">article focus</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="think">Thinking</label>
+                    <select id="think">
+                        <option value="auto">auto</option>
+                        <option value="false">disable</option>
+                        <option value="true">enable</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="contextChars">Context chars</label>
+                    <input id="contextChars" type="number" min="1000" max="100000" step="1000">
+                </div>
+
+                <div>
+                    <label for="numCtx">num_ctx</label>
+                    <input id="numCtx" type="number" min="1024" max="131072" step="1024">
+                </div>
+
+                <div>
+                    <label for="numPredict">num_predict</label>
+                    <input id="numPredict" type="number" min="64" max="32768" step="64">
+                </div>
+
+                <div>
+                    <label for="temperature">temperature</label>
+                    <input id="temperature" type="number" min="0" max="2" step="0.05">
+                </div>
+            </div>
+
+            <div class="actions">
+                <button id="ask">Ask</button>
+                <span id="status" class="status"></span>
+                <button id="quit" class="quit-button" type="button">Quit</button>
+            </div>
+        </section>
+
+        <section id="resultPanel" class="panel hidden">
+            <h2>Answer</h2>
+            <div id="answer" class="answer"></div>
+            <div id="metrics" class="metrics"></div>
+
+            <details class="references">
+                <summary>Referenced articles</summary>
+                <div id="details"></div>
+            </details>
+        </section>
+
+        <section id="errorPanel" class="panel hidden">
+            <h2>Error</h2>
+            <div id="error" class="error"></div>
+        </section>
+    </main>
+
+    <script src="/static/app.js" defer></script>
+</body>
+</html>

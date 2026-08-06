@@ -19,25 +19,33 @@ Thumbs.db
 .DS_Store
 
 # -----------------------------------------------------------------------------
+# Build environment
+# -----------------------------------------------------------------------------
+!build/data/.gitkeep
+!build/sample/.gitkeep
+!build/research/.gitkeep
+!build/conifigs/.gitkeep
+
+# -----------------------------------------------------------------------------
 # Generated data
 # -----------------------------------------------------------------------------
-data/*
 index/*
-sample/*
 logs/*
-tools/kiwix/*
-
-!data/00_build_wikipedia_jsonl.py
-
-# Keep directory structure
-!data/.gitkeep
 !index/.gitkeep
-!sample/.gitkeep
 !logs/.gitkeep
+
+# -----------------------------------------------------------------------------
+# External tools
+# -----------------------------------------------------------------------------
+# for kiwix
+tools/kiwix/*
+*.zim
+!tools/kiwix/.gitkeep
 
 # -----------------------------------------------------------------------------
 # Large generated files
 # -----------------------------------------------------------------------------
+*.bz2
 *.faiss
 *.f16
 *.f32
@@ -52,5 +60,3 @@ tools/kiwix/*
 *.tmp
 *.bak
 
-# for kiwix
-*.zim

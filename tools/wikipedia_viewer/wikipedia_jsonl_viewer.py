@@ -284,12 +284,21 @@ class ViewerApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.close_app)
         self.title_entry.focus_set()
 
+        self.after(0, self._raise_once)
+
         if self._ipc_socket is not None:
             threading.Thread(target=self._ipc_server, daemon=True).start()
             self.after(100, self._process_ipc_queue)
 
         if initial_title:
             self.after(50, lambda: self.open_title(initial_title, new_tab=True))
+
+    def _raise_once(self) -> None:
+        """Bring the window to the foreground once, then restore normal z-order."""
+        self.lift()
+        self.focus_force()
+        self.attributes("-topmost", True)
+        self.after(150, lambda: self.attributes("-topmost", False))
 
     def _on_tab_closed(self, _event=None) -> None:
         if not self.notebook.tabs():
@@ -356,8 +365,7 @@ class ViewerApp(tk.Tk):
             if title:
                 self.open_title(title, new_tab=bool(request.get("new_tab", True)))
                 self.deiconify()
-                self.lift()
-                self.focus_force()
+                self._raise_once()
         self.after(100, self._process_ipc_queue)
 
     def schedule_suggestions(self, _event=None) -> None:
@@ -485,7 +493,7 @@ class ViewerApp(tk.Tk):
             end_idx = f"{idx}+{len(term)}c"
             text_widget.tag_add("search_highlight", idx, end_idx)
             text_widget.tag_config(
-                "search_highlight", background="yellow", foreground="black"
+                "search_highlight", background="#FFD54F", foreground="black"
             )
             text_widget.see(idx)
             text_widget.mark_set(tk.INSERT, idx)
@@ -495,72 +503,63 @@ class ViewerApp(tk.Tk):
             messagebox.showinfo("検索", "見つかりません。")
             return None
 
+    def _show_search_match(self, text, idx):
+        text.tag_remove("search_highlight", "1.0", tk.END)
+        end_idx = text.index(f"{idx}+{len(self.last_search_term)}c")
+        text.tag_add("search_highlight", idx, end_idx)
+        text.tag_config("search_highlight", background="#FFD54F", foreground="black")
+        text.see(idx)
+        text.mark_set(tk.INSERT, idx)
+        text.focus_set()
+        self.last_search_index = text.index(idx)
+
     def find_next(self, event=None):
         selected_tab = self.notebook.select()
-        if not selected_tab:
-            return
+        if not selected_tab or not self.last_search_term:
+            return "break"
         frame = self.nametowidget(selected_tab)
         text = frame.article_text
 
-        start = self.last_search_index
+        start = text.index(f"{self.last_search_index}+{len(self.last_search_term)}c")
         idx = text.search(self.last_search_term, start, stopindex=tk.END, nocase=True)
+        if not idx:
+            idx = text.search(self.last_search_term, "1.0", stopindex=start, nocase=True)
+
         if idx:
-            end_idx = f"{idx}+{len(self.last_search_term)}c"
-            text.tag_add("search_highlight", idx, end_idx)
-            text.tag_config("search_highlight", background="yellow", foreground="black")
-            text.see(idx)
-            text.mark_set(tk.INSERT, idx)
-            self.last_search_index = end_idx
+            self._show_search_match(text, idx)
         else:
-            idx = text.search(
-                self.last_search_term, "1.0", stopindex=tk.END, nocase=True
-            )
-            if idx:
-                end_idx = f"{idx}+{len(self.last_search_term)}c"
-                text.tag_add("search_highlight", idx, end_idx)
-                text.tag_config(
-                    "search_highlight", background="yellow", foreground="black"
-                )
-                text.see(idx)
-                text.mark_set(tk.INSERT, idx)
-                self.last_search_index = end_idx
-            else:
-                messagebox.showinfo("検索", "見つかりません。")
+            messagebox.showinfo("検索", "見つかりません。")
+        return "break"
 
     def find_previous(self, event=None):
         selected_tab = self.notebook.select()
-        if not selected_tab:
-            return
+        if not selected_tab or not self.last_search_term:
+            return "break"
         frame = self.nametowidget(selected_tab)
         text = frame.article_text
 
-        if not self.last_search_term:
-            return
-
-        start = self.last_search_index
-        idx = text.search(self.last_search_term, "1.0", start, nocase=True)
-        if idx:
-            end_idx = f"{idx}+{len(self.last_search_term)}c"
-            text.tag_add("search_highlight", idx, end_idx)
-            text.tag_config("search_highlight", background="yellow", foreground="black")
-            text.see(idx)
-            text.mark_set(tk.INSERT, idx)
-            self.last_search_index = end_idx
-        else:
+        start = text.index(self.last_search_index)
+        idx = text.search(
+            self.last_search_term,
+            start,
+            stopindex="1.0",
+            backwards=True,
+            nocase=True,
+        )
+        if not idx:
             idx = text.search(
-                self.last_search_term, "1.0", stopindex=tk.END, nocase=True
+                self.last_search_term,
+                tk.END,
+                stopindex=start,
+                backwards=True,
+                nocase=True,
             )
-            if idx:
-                end_idx = f"{idx}+{len(self.last_search_term)}c"
-                text.tag_add("search_highlight", idx, end_idx)
-                text.tag_config(
-                    "search_highlight", background="yellow", foreground="black"
-                )
-                text.see(idx)
-                text.mark_set(tk.INSERT, idx)
-                self.last_search_index = end_idx
-            else:
-                messagebox.showinfo("検索", "見つかりません。")
+
+        if idx:
+            self._show_search_match(text, idx)
+        else:
+            messagebox.showinfo("検索", "見つかりません。")
+        return "break"
 
     def reset_search(self):
         selected_tab = self.notebook.select()

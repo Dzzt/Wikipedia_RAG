@@ -1,0 +1,15 @@
+{
+  "input": "E:\\Wikipedia_RAG\\data\\jawiki-latest-pages-articles.xml.bz2",
+  "output": "E:\\Wikipedia_RAG\\data\\wikipedia_ja_from_dump.jsonl",
+  "pages_seen": 3093865,
+  "namespace_0_pages": 2459017,
+  "redirects_skipped": 950130,
+  "articles_written": 1507267,
+  "empty_wikitext_skipped": 0,
+  "too_short_skipped": 1620,
+  "conversion_errors": 0,
+  "raw_wikitext_chars": 8816273708,
+  "cleaned_text_chars": 3031946942,
+  "elapsed_seconds": 7443.105,
+  "completed": true
+}

@@ -1,10 +1,12 @@
 @echo off
+setlocal
 cd /d "%~dp0"
+
 echo ===========================================
 echo   Wikipedia RAG (ruri-embed)
 echo ===========================================
-echo.
-python webui.py --index index --model qwen3:14b
-echo.
-echo Press any key to exit...
-pause >nul
+
+python webui.py --viewer jsonl --open-browser
+
+if errorlevel 1 pause
+endlocal

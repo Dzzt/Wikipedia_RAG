@@ -22,7 +22,7 @@
             <!-- 左側: Question -->
             <div class="field-question">
                 <label for="question">Question</label>
-                <textarea id="question" placeholder="Enter prompt..."></textarea>
+                <textarea id="question" placeholder="Enter prompt..." tabindex="1" autofocus></textarea>
             </div>
 
             <!-- 右側上部: Model, Top K -->
@@ -41,7 +41,7 @@
             <!-- 右側下部 (Question横の隙間エリア): Askボタンとステータス -->
             <div class="actions">
                 <span id="status" class="status"></span>
-                <button id="ask" type="button">Ask</button>
+                <button id="ask" type="button" tabindex="2">Ask</button>
             </div>
 
             <!-- パラメータ詳細エリア (下段に水平展開) -->

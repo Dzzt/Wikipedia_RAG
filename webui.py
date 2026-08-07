@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import sys
 import threading
 import time
@@ -400,10 +401,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/":
             self._send_file(DEFAULT_TEMPLATE_DIR / "index.html", "text/html; charset=utf-8")
-        elif path == "/static/style.css":
-            self._send_file(DEFAULT_STATIC_DIR / "style.css", "text/css; charset=utf-8")
-        elif path == "/static/app.js":
-            self._send_file(DEFAULT_STATIC_DIR / "app.js", "text/javascript; charset=utf-8")
+        elif path.startswith("/static/"):
+            filename = path.removeprefix("/static/")
+            file_path = DEFAULT_STATIC_DIR / filename
+            content_type, _encoding = mimetypes.guess_type(file_path.name)
+            self._send_file(file_path, content_type or "application/octet-stream")
         elif path == "/api/config":
             self.send_json(
                 {

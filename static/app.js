@@ -253,7 +253,11 @@ async function ask() {
             body: JSON.stringify(payload),
         });
 
-        ui.answer.textContent = data.answer;
+        if (data.answer) {
+            ui.answer.innerHTML = marked.parse(data.answer);
+        } else {
+            ui.answer.innerHTML = "";
+        }
         renderArticles(data.results);
         renderMetrics(data.metrics);
         ui.resultPanel.classList.remove("hidden");

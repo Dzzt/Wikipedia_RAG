@@ -25,6 +25,42 @@ const ui = {
     error: byId("error"),
 };
 
+const HEARTBEAT_INTERVAL_MS = 5_000;
+let heartbeatTimer = null;
+
+function sendHeartbeat() {
+    fetch("/api/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        cache: "no-store",
+        keepalive: true,
+    }).catch(() => {
+        // The server may already be shutting down. No UI error is needed here.
+    });
+}
+
+function startHeartbeat() {
+    if (heartbeatTimer !== null) {
+        return;
+    }
+    sendHeartbeat();
+    heartbeatTimer = window.setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopHeartbeat() {
+    if (heartbeatTimer === null) {
+        return;
+    }
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+}
+
+function notifyBrowserClosing() {
+    const body = new Blob(["{}"], { type: "application/json" });
+    navigator.sendBeacon("/api/browser_closing", body);
+}
+
 async function requestJson(url, options = {}) {
     const response = await fetch(url, { cache: "no-store", ...options });
     const data = await response.json();
@@ -275,6 +311,7 @@ async function quitApplication() {
         return;
     }
 
+    stopHeartbeat();
     ui.quit.disabled = true;
     setBusy(true, "Terminating...");
 
@@ -297,6 +334,8 @@ async function quitApplication() {
 }
 
 async function initialize() {
+    startHeartbeat();
+
     try {
         await Promise.all([loadConfig(), loadModels()]);
     } catch (error) {
@@ -310,6 +349,19 @@ ui.question.addEventListener("keydown", (event) => {
     if (event.ctrlKey && event.key === "Enter") {
         ask();
     }
+});
+
+window.addEventListener("pagehide", (event) => {
+    stopHeartbeat();
+
+    // A page stored in the back-forward cache is not actually gone.
+    if (!event.persisted) {
+        notifyBrowserClosing();
+    }
+});
+
+window.addEventListener("pageshow", () => {
+    startHeartbeat();
 });
 
 document.addEventListener("DOMContentLoaded", initialize);

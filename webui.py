@@ -43,6 +43,10 @@ DEFAULT_TEMPERATURE = 0.5
 DEFAULT_THINK_MODE = "auto"
 MAX_REQUEST_BYTES = 1_000_000
 
+BROWSER_CLOSE_GRACE_SECONDS = 5.0
+BROWSER_HEARTBEAT_TIMEOUT_SECONDS = 180.0
+BROWSER_MONITOR_INTERVAL_SECONDS = 1.0
+
 SEARCH_MODES = (
     "auto",
     "legacy_auto",
@@ -53,6 +57,68 @@ SEARCH_MODES = (
 )
 
 EXCLUDE_MODELS = ("ruri", "embed")
+
+
+class BrowserSessionMonitor:
+    """Track browser presence without treating a normal page reload as shutdown."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._last_heartbeat: float | None = None
+        self._close_deadline: float | None = None
+
+    def heartbeat(self) -> None:
+        now = time.monotonic()
+        with self._lock:
+            self._last_heartbeat = now
+            # A newly loaded/reloaded page cancels a pending close request.
+            self._close_deadline = None
+
+    def browser_closing(self) -> None:
+        with self._lock:
+            self._close_deadline = (
+                time.monotonic() + BROWSER_CLOSE_GRACE_SECONDS
+            )
+
+    def shutdown_reason(self) -> str | None:
+        now = time.monotonic()
+        with self._lock:
+            if (
+                self._close_deadline is not None
+                and now >= self._close_deadline
+            ):
+                return "browser page closed"
+
+            if (
+                self._last_heartbeat is not None
+                and now - self._last_heartbeat
+                >= BROWSER_HEARTBEAT_TIMEOUT_SECONDS
+            ):
+                return "browser heartbeat timed out"
+
+        return None
+
+    def wait(self, timeout: float) -> bool:
+        return self._stop_event.wait(timeout)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+
+def monitor_browser_session(
+    server: ThreadingHTTPServer,
+    monitor: BrowserSessionMonitor,
+) -> None:
+    """Shut the HTTP server down after the browser session disappears."""
+    while not monitor.wait(BROWSER_MONITOR_INTERVAL_SECONDS):
+        reason = monitor.shutdown_reason()
+        if reason is None:
+            continue
+
+        print(f"Browser session ended ({reason}). Shutting down.")
+        server.shutdown()
+        return
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +463,10 @@ class Handler(BaseHTTPRequestHandler):
     def app(self) -> RagApplication:
         return self.server.app  # type: ignore[attr-defined]
 
+    @property
+    def browser_monitor(self) -> BrowserSessionMonitor:
+        return self.server.browser_monitor  # type: ignore[attr-defined]
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/":
@@ -441,6 +511,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(self._handle_ask(request))
             elif path == "/api/open_article":
                 self._handle_open_article(request)
+            elif path == "/api/heartbeat":
+                self.browser_monitor.heartbeat()
+                self.send_json({"ok": True})
+            elif path == "/api/browser_closing":
+                self.browser_monitor.browser_closing()
+                self.send_json({"ok": True})
             elif path == "/api/shutdown":
                 self.send_json({"ok": True})
                 threading.Thread(
@@ -611,6 +687,15 @@ def main() -> int:
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.app = app  # type: ignore[attr-defined]
 
+    browser_monitor = BrowserSessionMonitor()
+    server.browser_monitor = browser_monitor  # type: ignore[attr-defined]
+    threading.Thread(
+        target=monitor_browser_session,
+        args=(server, browser_monitor),
+        name="browser-session-monitor",
+        daemon=True,
+    ).start()
+
     print("=" * 68)
     print("Wikipedia RAG Web UI")
     print(f"URL:     http://{args.host}:{args.port}")
@@ -634,6 +719,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nExiting.")
     finally:
+        browser_monitor.stop()
         server.server_close()
         app.close()
     return 0
